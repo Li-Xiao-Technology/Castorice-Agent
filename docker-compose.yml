@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  castorice:
+    build: .
+    container_name: castorice-agent
+    env_file:
+      - .env
+    volumes:
+      - ./castorice_data:/app/castorice_data
+    stdin_open: true
+    tty: true
+    restart: unless-stopped

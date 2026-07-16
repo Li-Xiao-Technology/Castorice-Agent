@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env.local
+
+# Runtime data (contains user conversations & memories)
+castorice_data/
+castorice_logs/
+*.db
+*.sqlite
+*.sqlite3
+chroma_db/
+
+# Configuration (sensitive - DO NOT COMMIT)
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Model cache
+.cache/
