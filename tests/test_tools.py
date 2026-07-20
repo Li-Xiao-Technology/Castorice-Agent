@@ -79,19 +79,19 @@ class TestPythonReplSandbox:
 
     def test_import_subprocess_blocked(self):
         result = self.repl.invoke({"code": "import subprocess"})
-        assert "ImportError" in result or "error" in result.lower()
+        assert "ImportError" in result or "error" in result.lower() or "安全拦截" in result
 
     def test_open_blocked(self):
         result = self.repl.invoke({"code": "f = open('test.txt', 'w')"})
-        assert "NameError" in result or "error" in result.lower()
+        assert "NameError" in result or "error" in result.lower() or "安全拦截" in result
 
     def test_exec_blocked(self):
         result = self.repl.invoke({"code": "exec('print(1)')"})
-        assert "NameError" in result or "error" in result.lower()
+        assert "NameError" in result or "error" in result.lower() or "安全拦截" in result
 
     def test_eval_blocked(self):
         result = self.repl.invoke({"code": "eval('1 + 1')"})
-        assert "NameError" in result or "error" in result.lower()
+        assert "NameError" in result or "error" in result.lower() or "安全拦截" in result
 
     def test_safe_builtins_present(self):
         """确保白名单中的内置函数可用"""

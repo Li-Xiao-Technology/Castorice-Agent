@@ -468,3 +468,35 @@ class Metacognition:
                 r for r in self._learned_rules.values()
                 if r["confidence"] >= min_confidence
             ]
+
+    def get_applicable_rules(
+        self,
+        query: str,
+        top_k: int = 3,
+        min_confidence: float = 0.5,
+    ) -> List[Dict[str, Any]]:
+        """
+        获取与当前 query 相关的已学习规则
+
+        :param query: 用户输入或当前话题
+        :param top_k: 返回最多几条规则
+        :param min_confidence: 最小置信度阈值
+        :return: 相关规则列表（按相关性排序）
+        """
+        rules = self.get_learned_rules(min_confidence=min_confidence)
+        if not rules:
+            return []
+
+        query_words = set(query.lower().split())
+        scored = []
+
+        for rule in rules:
+            rule_words = set(rule["description"].lower().split())
+            if not rule_words:
+                continue
+            similarity = len(query_words & rule_words) / len(query_words | rule_words)
+            if similarity > 0:
+                scored.append((similarity, rule))
+
+        scored.sort(reverse=True, key=lambda x: x[0])
+        return [r for _, r in scored[:top_k]]

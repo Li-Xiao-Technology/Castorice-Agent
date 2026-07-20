@@ -305,6 +305,76 @@ class ShortTermMemory:
         conn.execute("UPDATE sessions SET summary = ? WHERE session_id = ?", (summary, session_id))
         conn.commit()
 
+    def generate_summary(
+        self,
+        session_id: str,
+        model_adapter: Any = None,
+        max_messages: int = 50,
+    ) -> str:
+        """
+        使用 LLM 生成会话摘要
+
+        :param session_id: 会话 ID
+        :param model_adapter: 模型适配器（用于生成摘要）
+        :param max_messages: 最多使用多少条消息生成摘要
+        :return: 会话摘要文本
+        """
+        messages = self.get_history(session_id, limit=max_messages)
+        if not messages:
+            return ""
+
+        if model_adapter is None:
+            return self._simple_summary(messages)
+
+        try:
+            from castorice.model_adapter import ChatMessage
+
+            conversation_text = "\n".join(
+                f"{m.role}: {m.content[:500]}"
+                for m in messages[-30:]
+            )
+
+            prompt = f"""请为以下对话生成一个简明扼要的摘要（50-100字）。
+
+【对话内容】
+{conversation_text}
+
+【摘要要求】
+1. 概括用户的主要问题和需求
+2. 概括 Agent 的关键回答和行动
+3. 提取对话中的关键主题和结论
+4. 使用中文，保持简洁
+
+请直接返回摘要，不要其他内容。"""
+
+            response = model_adapter.chat([
+                ChatMessage("system", "你是对话摘要专家，只输出摘要内容。"),
+                ChatMessage("user", prompt),
+            ])
+            summary = response.content if hasattr(response, "content") else str(response)
+            self.update_summary(session_id, summary)
+            return summary.strip()
+
+        except Exception as e:
+            logger.warning(f"LLM 生成摘要失败，使用简单摘要: {e}")
+            return self._simple_summary(messages)
+
+    def _simple_summary(self, messages: List[Message]) -> str:
+        """简单摘要（不使用 LLM）"""
+        user_messages = [m for m in messages if m.role == "user"]
+        if not user_messages:
+            return ""
+
+        # 提取用户最后几条消息的关键词
+        recent_user = user_messages[-3:]
+        topics = []
+        for msg in recent_user:
+            content = msg.content[:100]
+            if content not in topics:
+                topics.append(content)
+
+        return f"对话主题: {'; '.join(topics)}"
+
     def close(self) -> None:
         """关闭当前线程的 SQLite 连接"""
         if hasattr(self._local, "conn") and self._local.conn is not None:

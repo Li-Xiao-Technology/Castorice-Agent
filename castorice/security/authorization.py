@@ -90,7 +90,8 @@ class ProgressiveAuthorization:
         :return: (allowed, reason)
         """
         with self._lock:
-            required_level = OPERATION_TRUST_LEVELS.get(operation, 0)
+            # 未知操作默认需要最高信任等级（L5），遵循"默认拒绝"原则
+            required_level = OPERATION_TRUST_LEVELS.get(operation, 5)
             if self.current_level >= required_level:
                 return True, f"信任等级 {self.current_level} >= 所需 {required_level}"
             return False, (

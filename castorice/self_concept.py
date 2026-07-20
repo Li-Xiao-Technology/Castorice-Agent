@@ -161,8 +161,9 @@ class SelfConcept:
             if pattern.search(new_content):
                 return False, f"包含禁止模式: {pattern.pattern}"
 
-        # 3. 可执行文件 magic bytes 检测
-        if new_content[:4] in (b"\x7fELF", b"MZ\x90\x00", b"\xca\xfe\xba\xbe"):
+        # 3. 可执行文件 magic bytes 检测（编码为 bytes 后比较）
+        content_bytes = new_content[:4].encode("utf-8", errors="ignore")
+        if content_bytes in (b"\x7fELF", b"MZ\x90\x00", b"\xca\xfe\xba\xbe"):
             return False, "包含可执行文件头"
 
         return True, ""

@@ -1088,6 +1088,118 @@ def _generate_image(prompt: str, width: int = 1024, height: int = 1024, seed: in
         return f"图片生成失败: {e}"
 
 
+# ========== 图片理解工具 ==========
+
+@register_tool(
+    name="analyze_image",
+    description="分析图片内容，理解图片中的物体、场景、文字、人物表情等。当用户发送图片或提供图片URL并询问图片内容时使用。参数: image_url(必填,图片URL)",
+)
+def _analyze_image(image_url: str) -> str:
+    """
+    使用多模态LLM分析图片内容
+    使用 Gemini API（免费可用）进行图片理解
+    """
+    try:
+        import os
+        import urllib.parse
+
+        gemini_api_key = os.environ.get("GEMINI_API_KEY", "")
+        if not gemini_api_key:
+            return """图片分析服务需要配置 GEMINI_API_KEY 环境变量。
+请在 .env 文件中添加:
+GEMINI_API_KEY=your_api_key
+
+获取方式: https://ai.google.dev/
+免费额度: 每月15万次请求"""
+
+        encoded_url = urllib.parse.quote(image_url)
+        prompt = "请详细描述这张图片的内容，包括：\n1. 图片中的主要物体和场景\n2. 人物的表情和动作（如果有人物）\n3. 图片的整体氛围和风格\n4. 图片中包含的文字信息\n5. 任何值得注意的细节"
+
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro-vision:generateContent?key={gemini_api_key}"
+        
+        import base64
+        from io import BytesIO
+        
+        client = _get_httpx_client()
+        try:
+            resp = client.get(image_url, timeout=30)
+            resp.raise_for_status()
+            image_data = base64.b64encode(resp.content).decode('utf-8')
+            
+            payload = {
+                "contents": [{
+                    "parts": [
+                        {"text": prompt},
+                        {"inline_data": {"mime_type": resp.headers.get('content-type', 'image/jpeg'), "data": image_data}}
+                    ]
+                }]
+            }
+            
+            response = client.post(url, json=payload, timeout=60)
+            response.raise_for_status()
+            result = response.json()
+            
+            if "candidates" in result and result["candidates"]:
+                text_parts = []
+                for part in result["candidates"][0].get("content", {}).get("parts", []):
+                    if "text" in part:
+                        text_parts.append(part["text"])
+                if text_parts:
+                    return "\n\n".join(text_parts)
+                return "图片分析返回结果为空"
+            else:
+                return f"图片分析失败: {result.get('error', {}).get('message', '未知错误')}"
+                
+        except Exception as e:
+            return f"图片分析失败: {e}"
+
+    except ImportError:
+        return "图片分析需要 httpx 库，请安装: pip install httpx"
+
+
+@register_tool(
+    name="extract_text_from_image",
+    description="从图片中提取文字（OCR）。当用户需要识别图片中的文字内容时使用。参数: image_url(必填,图片URL)",
+)
+def _extract_text_from_image(image_url: str) -> str:
+    """
+    使用免费OCR服务提取图片中的文字
+    """
+    try:
+        import os
+        client = _get_httpx_client()
+
+        ocr_api_key = os.environ.get("OCR_SPACE_API_KEY", "K85276029688957")  # 默认使用免费公共key，可通过环境变量覆盖
+
+        url = "https://api.ocr.space/parse/image"
+        payload = {
+            "url": image_url,
+            "apikey": ocr_api_key,
+            "language": "chs",
+            "isOverlayRequired": "false",
+        }
+        
+        resp = client.post(url, data=payload, timeout=30)
+        resp.raise_for_status()
+        result = resp.json()
+        
+        if result.get("IsErroredOnProcessing"):
+            return f"OCR识别失败: {result.get('ErrorMessage', '未知错误')}"
+            
+        if "ParsedResults" in result and result["ParsedResults"]:
+            texts = []
+            for item in result["ParsedResults"]:
+                texts.append(item.get("ParsedText", ""))
+            if texts:
+                return "\n".join(texts).strip() or "图片中未识别到文字"
+            return "图片中未识别到文字"
+        else:
+            return "OCR识别返回结果为空"
+            
+    except Exception as e:
+        return f"OCR识别失败: {e}"
+
+
 # ========== Pixiv 插画工具 ==========
 
 @register_tool(

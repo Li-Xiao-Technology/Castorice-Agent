@@ -235,7 +235,7 @@ class LongTermMemory(MemoryInterface):
             doc_id = hashlib.sha256(text.encode("utf-8")).hexdigest()[:32]
             # P1-2/P2-3: metadata 补充 timestamp（数值类型，用于 ChromaDB $lt 过滤）
             # ChromaDB 的 where 操作符 $lt/$gt 仅支持数值，不支持字符串
-            meta = metadata or {}
+            meta = dict(metadata or {})  # 复制以避免修改调用者的字典
             now = datetime.now(timezone.utc)
             if "timestamp" not in meta:
                 # 数值时间戳（Unix timestamp）用于过滤
@@ -261,8 +261,9 @@ class LongTermMemory(MemoryInterface):
             now_ts = now.timestamp()
             now_iso = now.isoformat()
             metas = []
-            for i, m in enumerate(metadatas or [{}] * len(texts)):
-                m = m or {}
+            for i, m in enumerate(metadatas or ([{}] * len(texts))):
+                # 复制以避免修改调用者的字典（并避免 [{}]*N 产生的共享引用问题）
+                m = dict(m or {})
                 if "timestamp" not in m:
                     m["timestamp"] = now_ts
                 if "timestamp_iso" not in m:

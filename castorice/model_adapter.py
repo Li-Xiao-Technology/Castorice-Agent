@@ -86,16 +86,25 @@ class ChatMessage:
         tool_calls: Optional[List[ToolCall]] = None,
         tool_call_id: Optional[str] = None,
         name: Optional[str] = None,
+        image_urls: Optional[List[str]] = None,
     ):
         self.role = role           # 'system' / 'user' / 'assistant' / 'tool'
         self.content = content
         self.tool_calls = tool_calls or []
         self.tool_call_id = tool_call_id  # 工具结果消息的 call_id
         self.name = name           # 工具结果消息的工具名
+        self.image_urls = image_urls or []  # 多模态图片URL
 
     def to_dict(self) -> Dict[str, Any]:
         d: Dict[str, Any] = {"role": self.role}
-        if self.content is not None:
+        if self.image_urls:
+            content_parts: List[Dict[str, Any]] = []
+            if self.content:
+                content_parts.append({"type": "text", "text": self.content})
+            for img_url in self.image_urls:
+                content_parts.append({"type": "image_url", "image_url": {"url": img_url}})
+            d["content"] = content_parts
+        elif self.content is not None:
             d["content"] = self.content
         if self.tool_calls:
             d["tool_calls"] = [tc.to_dict() for tc in self.tool_calls]
