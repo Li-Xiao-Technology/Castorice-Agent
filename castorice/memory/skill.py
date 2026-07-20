@@ -8,7 +8,7 @@ import os
 import re
 import uuid
 from dataclasses import dataclass, field, asdict
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
 
 
@@ -22,8 +22,8 @@ class Skill:
     id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
     version: int = 1
     enabled: bool = True
-    created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
-    updated_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     required_tools: List[str] = field(default_factory=list)
     applicable_scenarios: List[str] = field(default_factory=list)
     success_count: int = 0
@@ -31,7 +31,7 @@ class Skill:
 
     def bump_version(self) -> None:
         self.version += 1
-        self.updated_at = datetime.utcnow().isoformat()
+        self.updated_at = datetime.now(timezone.utc).isoformat()
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -63,7 +63,7 @@ class SkillMemory:
 
     def _save(self) -> None:
         os.makedirs(os.path.dirname(self.storage_path) or ".", exist_ok=True)
-        data = {"version": "1.0", "skills": [s.to_dict() for s in self.skills], "updated_at": datetime.utcnow().isoformat()}
+        data = {"version": "1.0", "skills": [s.to_dict() for s in self.skills], "updated_at": datetime.now(timezone.utc).isoformat()}
         with open(self.storage_path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
@@ -74,9 +74,28 @@ class SkillMemory:
             existing.steps = skill.steps or existing.steps
             existing.trigger_keywords = list(set(existing.trigger_keywords + skill.trigger_keywords))
             existing.description = skill.description or existing.description
+            # P2-8: 补全 required_tools 和 applicable_scenarios 字段更新
+            if skill.required_tools:
+                existing.required_tools = list(set(existing.required_tools + skill.required_tools))
+            if skill.applicable_scenarios:
+                existing.applicable_scenarios = list(set(existing.applicable_scenarios + skill.applicable_scenarios))
         else:
             self.skills.append(skill)
         self._save()
+
+    def record_success(self, skill_id: str) -> None:
+        """P2-8: 记录技能成功使用"""
+        skill = self.find_by_id(skill_id)
+        if skill:
+            skill.success_count += 1
+            self._save()
+
+    def record_failure(self, skill_id: str) -> None:
+        """P2-8: 记录技能使用失败"""
+        skill = self.find_by_id(skill_id)
+        if skill:
+            skill.failure_count += 1
+            self._save()
 
     def find_by_name(self, name: str) -> Optional[Skill]:
         for s in self.skills:
@@ -128,6 +147,8 @@ class SkillMemory:
         return False
 
     def export(self, export_path: str) -> None:
+        # P3-6: 导出前创建目录，避免路径不存在时失败
+        os.makedirs(os.path.dirname(export_path) or ".", exist_ok=True)
         with open(export_path, "w", encoding="utf-8") as f:
             json.dump({"skills": [s.to_dict() for s in self.skills]}, f, ensure_ascii=False, indent=2)
 

@@ -1,0 +1,47 @@
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[project]
+name = "castorice-emotion"
+version = "0.1.0"
+description = "Castorice Emotion SDK - 情感计算与元认知引擎（L1-L4 PAD 情感系统 + 元认知反思）"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Lixiao", email = "castorice@example.com"},
+]
+keywords = [
+    "emotion", "affective-computing", "pad-model",
+    "metacognition", "agent", "llm", "ai-companion",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# 核心依赖：仅一个，保持轻量
+dependencies = []
+
+[project.optional-dependencies]
+# 持久化支持（默认开启，可关闭以纯内存运行）
+persistence = []
+# 测试
+test = ["pytest>=7.0", "pytest-cov>=4.0"]
+# 文档
+docs = ["mkdocs>=1.5", "mkdocs-material>=9.0"]
+
+[project.urls]
+Homepage = "https://github.com/castorice/castorice-emotion"
+Documentation = "https://github.com/castorice/castorice-emotion#readme"
+Issues = "https://github.com/castorice/castorice-emotion/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/castorice_emotion"]

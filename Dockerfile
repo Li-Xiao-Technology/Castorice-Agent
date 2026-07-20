@@ -1,21 +1,23 @@
-# Castorice Agent - Docker 部署
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# 复制依赖清单
-COPY pyproject.toml ./
-COPY castorice ./castorice
-COPY castorice_config.yaml ./
+ENV PYTHONUNBUFFERED=1
+ENV HF_ENDPOINT=https://hf-mirror.com
 
-# 安装依赖
-RUN pip install --no-cache-dir -e ".[memory,ollama]"
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-# 复制配置模板
-COPY .env.example .env.example
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# 数据目录挂载点
-VOLUME ["/app/castorice_data"]
+COPY . .
 
-# 启动命令（可通过 docker run --env-file .env 注入密钥）
-CMD ["python", "-m", "castorice.main", "--mode", "interactive"]
+RUN pip install --no-cache-dir -e .
+
+EXPOSE 8000
+
+CMD ["python", "-m", "castorice.main", "--mode", "server"]

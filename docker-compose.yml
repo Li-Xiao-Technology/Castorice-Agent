@@ -1,13 +1,26 @@
 version: '3.8'
 
 services:
-  castorice:
+  castorice-agent:
     build: .
+    image: castorice-agent:latest
     container_name: castorice-agent
-    env_file:
-      - .env
+    ports:
+      - "8000:8000"
+    environment:
+      - CASTORICE_LLM_PROVIDER=${CASTORICE_LLM_PROVIDER:-openai}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o}
+      - LLM_TEMPERATURE=${LLM_TEMPERATURE:-0.7}
+      - LLM_MAX_TOKENS=${LLM_MAX_TOKENS:-4096}
     volumes:
       - ./castorice_data:/app/castorice_data
-    stdin_open: true
-    tty: true
+      - ./logs:/app/logs
+      - ./.env:/app/.env:ro
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3

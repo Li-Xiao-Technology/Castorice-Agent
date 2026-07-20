@@ -20,6 +20,8 @@ dependencies = [
     "pyyaml>=6.0.1",                    # YAML 配置解析
     "python-dotenv>=1.0.0",             # .env 环境变量加载
     "pydantic>=2.7.0",                  # 数据校验
+    # Token 计数（P1-30: 精确 token 统计）
+    "tiktoken>=0.7.0",                  # OpenAI tokenizer，用于精确 token 计数
     # 工具与文档解析
     "pypdf>=4.2.0",                     # PDF 文档读取
     "python-docx>=1.1.0",               # Word 文档读取
@@ -30,22 +32,77 @@ dependencies = [
     # 长期记忆（向量数据库，默认启用）
     "chromadb>=0.5.0",                  # 向量数据库引擎
     "sentence-transformers>=3.0.0",     # 本地嵌入模型
+    # 工具热更新
+    "watchdog>=4.0.0",                  # 文件监控（自动热更新）
 ]
 
 [project.optional-dependencies]
+# HTTP API 服务器
+http = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+]
 # Ollama 本地模型
 ollama = [
     "httpx>=0.27.0",
 ]
-# IM 扩展（Telegram / Discord）
+# IM 扩展（Telegram / Discord / QQ）
 im = [
     "python-telegram-bot>=21.0",
     "discord.py>=2.3.0",
+    "websockets>=12.0",
+]
+# QQ 机器人（QQ 开放平台）
+qq = [
+    "websockets>=12.0",
+    "httpx>=0.27.0",
 ]
 # 开发调试
 dev = [
     "ipython>=8.25.0",
     "pytest>=8.2.0",
+    "watchdog>=4.0.0",
+]
+# LangChain 生态（桥接第三方工具/文档加载器）
+langchain = [
+    "langchain-core>=0.1.0",
+    "langchain-community>=0.2.0",
+]
+# Google Gemini 原生 SDK
+gemini = [
+    "google-genai>=0.5.0",
+]
+# 阿里云通义千问原生 SDK
+qwen = [
+    "dashscope>=1.14.0",
+]
+# Pinecone 向量数据库
+pinecone = [
+    "pinecone-client>=3.0.0",
+    "sentence-transformers>=3.0.0",
+]
+# FAISS 向量数据库
+faiss = [
+    "faiss-cpu>=1.8.0",
+    "sentence-transformers>=3.0.0",
+]
+# 多模态支持（图片理解、语音合成）
+multimodal = [
+    "pillow>=10.0.0",
+    "transformers>=4.40.0",
+    "torch>=2.2.0",
+]
+# 完整生态（包含所有可选依赖）
+full = [
+    "castorice-agent[http]",
+    "castorice-agent[langchain]",
+    "castorice-agent[gemini]",
+    "castorice-agent[qwen]",
+    "castorice-agent[pinecone]",
+    "castorice-agent[faiss]",
+    "castorice-agent[multimodal]",
+    "castorice-agent[im]",
+    "castorice-agent[qq]",
 ]
 
 [project.scripts]

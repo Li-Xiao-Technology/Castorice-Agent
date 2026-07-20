@@ -43,5 +43,10 @@ Thumbs.db
 *.log
 logs/
 
+# Backup directories (contains sensitive data)
+backup_for_upload/
+backup/
+backups/
+
 # Model cache
 .cache/

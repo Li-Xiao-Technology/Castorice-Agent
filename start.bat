@@ -8,6 +8,12 @@ REM   Double-click to run, or run from cmd.exe
 REM   For PowerShell use:  cmd /c start.bat
 REM ============================================================
 
+REM Clear proxy environment variables to fix pip connection issues
+set HTTP_PROXY=
+set HTTPS_PROXY=
+set http_proxy=
+set https_proxy=
+
 title Castorice Agent v2.0
 cd /d "%~dp0"
 
