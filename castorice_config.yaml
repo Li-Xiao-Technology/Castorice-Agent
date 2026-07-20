@@ -16,9 +16,94 @@ runtime:
   human_review_threshold: 0.6        # 触发 HITL 的置信度阈值（0.0-1.0）
   enable_reflection: true            # 是否启用反思节点
   enable_skill_generation: true      # 是否启用自动技能生成
+  # P1-32: default_workflow 已删除——工作流由动态选择器根据任务复杂度自动选择
+
+  # 情感引擎（L1 性格设定 + L2 PAD 状态机 + L3 决策影响 + L4 共情记忆）
+  emotion:
+    enabled: true                    # 是否启用情感系统
+    storage_path: "./castorice_data/emotion_state.json"  # 情感状态持久化路径
+
+  # 自我进化系统（经历流 + 反思 + 自我概念，参考 Generative Agents/MemGPT）
+  self_evolving:
+    enabled: true                                       # 是否启用自我进化
+    experience_journal_path: "./castorice_data/experiences.db"  # 经历流 SQLite
+    self_concept_path: "./castorice_data/self_concept.md"       # 自我概念文档
+    reflection_interval_turns: 10                       # 定期反思的轮数间隔
+    reflection_llm_threshold: 0.4                       # 触发 LLM 反思的置信度阈值
+    max_experiences: 10000                              # 经历流最大条数（LRU 淘汰）
+
+# --------------- 工作流模板（配置化步骤编排） ---------------
+workflows:
+  # 标准模式：意图 → 工具循环 → 回答 → 反思 → 记忆
+  standard:
+    description: "标准工具调用模式"
+    steps:
+      - intent                       # 意图分类
+      - tool_loop                    # LLM 驱动工具调用循环
+      - answer                       # 生成最终回答
+      - reflection                   # 反思复盘
+      - memory                       # 记忆归档
+      - skill                        # 技能沉淀
+  
+  # 简单问答模式：意图识别 + 工具调用 + 回答 + 记忆
+  simple_qa:
+    description: "简单问答模式，支持基础工具调用"
+    steps:
+      - intent
+      - tool_loop
+      - answer
+      - memory                       # 记忆归档（确保简单对话也写入长期记忆）
+
+  # 深度调研模式：任务分解 + 多次工具调用 + 反思
+  research:
+    description: "深度调研模式，多次工具调用"
+    steps:
+      - intent
+      - planning                     # P1-34: 任务分解
+      - tool_loop                    # 允许更多轮工具调用
+      - reflection
+      - tool_loop                    # 第二轮工具调用
+      - answer
+      - memory
+
+  # 创意写作模式：读文件 → 写文件
+  creative_writer:
+    description: "创意写作模式"
+    steps:
+      - intent
+      - tool_loop                    # 可能调用 read_file
+      - reflection
+      - tool_loop                    # 可能调用 write_file
+      - answer
+      - memory                       # 记忆归档
+
+  # 代码助手模式：任务分解 + 代码执行 + 反思
+  code_assistant:
+    description: "代码助手模式"
+    steps:
+      - intent
+      - planning                     # P1-34: 任务分解
+      - tool_loop                    # 可能调用 python_repl
+      - reflection
+      - answer
+      - memory                       # 记忆归档
+
+  # 深度思考模式：任务分解 + 多轮工具 + 反思 + 记忆（P1-35: 与 PRESETS 一致）
+  deep_thought:
+    description: "深度思考模式，复杂任务专用"
+    steps:
+      - intent
+      - planning
+      - tool_loop
+      - reflection
+      - tool_loop
+      - answer
+      - memory
 
 # --------------- 短期记忆（SQLite 会话） ---------------
 memory:
+  backend: "chroma"                  # 长期记忆后端：chroma / pinecone / faiss / langchain
+  
   short_term:
     db_path: "./castorice_data/sessions.db"  # SQLite 数据库路径
     max_turns: 20                            # 保留最近 N 轮对话
@@ -30,28 +115,104 @@ memory:
     top_k: 5                                 # 检索返回条数
     similarity_threshold: 0.75               # 相似度阈值
 
+    # Pinecone 配置（当 backend=pinecone 时生效）
+    pinecone:
+      api_key: "${PINECONE_API_KEY}"
+      index_name: "castorice"
+      environment: "us-east-1"
+
+    # FAISS 配置（当 backend=faiss 时生效）
+    faiss:
+      persist_path: "./castorice_data/faiss_index"
+
   skill:
     storage_path: "./castorice_data/skill_library.json"  # 技能库路径
     auto_generate: true                       # 是否自动生成技能
     min_trigger_count: 3                      # 触发自动生成的最小次数
     version_control: true                     # 是否启用版本管理
 
-# --------------- 工具启用配置 ---------------
+# --------------- 工具启用配置（P1-28: 28 个工具全部配置 enabled 开关） ---------------
 tools:
+  # --- 基础工具 ---
   web_search:                          # 联网搜索工具
     enabled: true
     max_results: 5
     region: "zh-CN"
-  file_io:                             # 文件读写工具
+  get_weather:                         # 实时天气查询
+    enabled: true
+  get_current_time:                    # 获取当前时间
+    enabled: true
+  read_file:                           # 文件读取工具
     enabled: true
     allowed_paths:                      # 允许访问的目录白名单
       - "./"
-  code_execution:                      # Python 代码执行
+  write_file:                          # 文件写入工具
+    enabled: true
+    allowed_paths:
+      - "./"
+  python_repl:                         # Python 代码执行
     enabled: true
   terminal:                            # 终端命令
     enabled: true
-  document_reader:                     # 文档读取
+  read_document:                       # 文档读取
     enabled: true
+
+  # --- 外部信息检索工具 ---
+  web_fetch:                           # 网页抓取
+    enabled: true
+  wikipedia_search:                    # 维基百科搜索
+    enabled: true
+  arxiv_search:                        # 学术论文搜索
+    enabled: true
+  news_search:                         # 新闻搜索
+    enabled: true
+  github_search:                       # GitHub 搜索
+    enabled: true
+  youtube_search:                      # YouTube 搜索
+    enabled: true
+  bilibili_search:                     # B站搜索
+    enabled: true
+  ip_info:                             # IP 信息查询
+    enabled: true
+  stock_price:                         # 股票价格查询
+    enabled: true
+  translate_text:                      # 文本翻译
+    enabled: true
+
+  # --- 动漫工具 ---
+  anime_search:                        # 动漫搜索
+    enabled: true
+  anime_season:                        # 季度番组
+    enabled: true
+
+  # --- VRChat 工具 ---
+  vrchat_search:                       # VRChat 世界搜索
+    enabled: true
+  vrchat_popular_worlds:               # VRChat 热门世界
+    enabled: true
+  vrchat_user_status:                  # VRChat 用户状态
+    enabled: true
+  vrchat_world_info:                   # VRChat 世界详情
+    enabled: true
+
+  # --- 图像生成 ---
+  generate_image:                      # AI 图像生成（Pollinations）
+    enabled: true
+
+  # --- Pixiv 工具 ---
+  pixiv_search:                        # Pixiv 图片搜索（搜索已有插画，非AI生成）
+    enabled: true
+  pixiv_popular:                       # Pixiv 排行榜
+    enabled: true
+  pixiv_user_works:                    # Pixiv 用户作品
+    enabled: true
+
+  # LangChain 生态工具（按需加载）
+  langchain_tools:
+    enabled: true                      # 是否启用 LangChain 工具
+    tools:                             # 需要加载的工具列表
+      - wikipedia                      # 维基百科
+      - arxiv                          # 学术论文
 
 # --------------- 安全沙箱策略 ---------------
 security:
@@ -77,3 +238,24 @@ user_profile:
 logging:
   level: "INFO"                         # 日志级别：DEBUG / INFO / WARNING / ERROR
   file_path: "./castorice_data/castorice.log"
+
+# --------------- QQ 机器人配置 ---------------
+qq_bot:
+  enabled: true                         # 是否启用 QQ 机器人
+  sandbox: true                         # 是否使用沙箱环境（测试用）
+  # 注意：AppID 和 AppSecret 请在 .env 中配置
+  # QQ_BOT_APP_ID=xxx
+  # QQ_BOT_APP_SECRET=xxx
+  
+  # Intent 权限配置（控制接收哪些类型的消息）
+  # 预设值：basic / with_c2c / all
+  # basic: 仅频道@消息 + 频道私信（默认，无需额外权限）
+  # with_c2c: 频道@消息 + 频道私信 + C2C私聊（需要在开放平台申请C2C权限，否则会报4014错误）
+  # all: 所有消息类型（需要平台权限审核）
+  # 注意：如果出现 4014 disallowed intents 错误，请改回 basic
+  intent: "with_c2c"
+  
+  reply_prefix: ""                      # 回复前缀（可选）
+  auto_reply: true                      # 是否自动回复
+  allowed_groups: []                    # 允许的群列表（空表示全部允许）
+  allowed_users: []                     # 允许的用户列表（空表示全部允许）
