@@ -16,7 +16,7 @@ Castorice Emotion SDK - 情感计算与元认知引擎
 """
 
 # 版本号
-__version__ = "0.2.0"
+__version__ = "2.5.0"
 
 # 情感引擎核心
 from .emotion import (

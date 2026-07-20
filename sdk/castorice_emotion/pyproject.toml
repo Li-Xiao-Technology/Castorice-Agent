@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "castorice-emotion"
-version = "0.1.0"
+version = "2.5.0"
 description = "Castorice Emotion SDK - 情感计算与元认知引擎（L1-L4 PAD 情感系统 + 元认知反思）"
 readme = "README.md"
 requires-python = ">=3.10"

@@ -7,4 +7,4 @@ Castorice Agent - 自进化智能体
 - 精简依赖（移除 LangChain 体系碎片化子包）
 - 统一配置（.env 存密钥 + yaml 存业务）
 """
-__version__ = "2.0.0"
+__version__ = "2.5.0"

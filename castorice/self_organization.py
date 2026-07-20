@@ -252,10 +252,11 @@ class TaskExecutor:
     - 结果汇总
     """
 
-    def __init__(self, tools: Dict[str, Any], max_workers: int = 3):
+    def __init__(self, tools: Dict[str, Any], max_workers: int = 3, model_adapter: Any = None):
         self.tools = tools
         self.max_workers = max_workers
         self._lock = threading.Lock()
+        self.model_adapter = model_adapter
 
     def execute(self, plan: TaskPlan, parallel: bool = True) -> TaskPlan:
         """执行整个任务计划"""
@@ -363,7 +364,18 @@ class TaskExecutor:
             subtask.execution_time_ms = (time.time() - t0) * 1000
 
     def _extract_args(self, subtask: SubTask) -> Any:
-        """从子任务描述中提取工具参数"""
+        """从子任务描述中提取工具参数（优先 LLM 推断，回退规则匹配）"""
+        desc = subtask.description.strip()
+        
+        # LLM 智能推断参数（如果有 model_adapter）
+        if hasattr(self, 'model_adapter') and self.model_adapter is not None:
+            return self._llm_extract_args(subtask)
+        
+        # 回退：规则匹配
+        return self._rule_based_extract_args(subtask)
+
+    def _rule_based_extract_args(self, subtask: SubTask) -> Any:
+        """规则匹配提取参数（LLM 不可用时的 fallback）"""
         desc = subtask.description.strip()
         
         if subtask.tool == "web_search":
@@ -410,12 +422,59 @@ class TaskExecutor:
         elif subtask.tool == "get_current_time":
             return {}
         
-        elif subtask.tool == "read_document":
-            import re
-            paths = re.findall(r'[\w./\\~\-]+\.[a-zA-Z0-9]+', desc)
-            return {"file_path": paths[0]} if paths else {"file_path": desc}
-        
         return {"input": desc}
+
+    def _llm_extract_args(self, subtask: SubTask) -> Any:
+        """
+        使用 LLM 智能推断工具参数
+
+        根据子任务描述和工具类型，让 LLM 推断最合适的参数值。
+        """
+        from castorice.model_adapter import ChatMessage
+        from castorice.utils import extract_json
+
+        tool_info = {}
+        if subtask.tool in self.tools:
+            tool = self.tools[subtask.tool]
+            tool_info = {
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": tool.parameters if hasattr(tool, 'parameters') else {},
+            }
+
+        prompt = f"""你是参数提取专家。请根据以下信息，为工具「{subtask.tool}」提取参数。
+
+【工具信息】
+名称: {tool_info.get('name', '')}
+描述: {tool_info.get('description', '')}
+
+【子任务描述】
+{subtask.description}
+
+【任务】
+从子任务描述中提取工具所需的参数。参数值要具体、完整。
+
+【输出格式】
+只返回 JSON：{{"arguments": {{"参数名": "值"}}}}
+
+注意：
+- 如果工具不需要参数，返回空对象
+- 参数值要从描述中提取，不要凭空猜测
+- 如果无法提取，返回空对象"""
+
+        try:
+            response = self.model_adapter.chat([
+                ChatMessage("system", "你是参数提取专家，只输出 JSON。"),
+                ChatMessage("user", prompt),
+            ])
+            parsed = extract_json(response.content)
+            args = parsed.get("arguments", {})
+            if args:
+                return args
+        except Exception as e:
+            logger.debug(f"LLM 参数提取失败，回退规则匹配: {e}")
+
+        return self._rule_based_extract_args(subtask)
 
 
 class DynamicWorkflowSelector:

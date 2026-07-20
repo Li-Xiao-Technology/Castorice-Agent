@@ -25,7 +25,10 @@ castorice_logs/
 *.db
 *.sqlite
 *.sqlite3
-chroma_db/
+chromadb/
+
+# User profile data (contains real user information)
+memory/user_profile.json
 
 # Configuration (sensitive - DO NOT COMMIT)
 .env

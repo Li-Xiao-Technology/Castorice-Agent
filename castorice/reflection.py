@@ -27,6 +27,7 @@
 import json
 import logging
 import threading
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -352,3 +353,290 @@ class ReflectionEngine:
         except Exception as e:
             logger.debug(f"get_recent_signal 失败: {e}")
             return ""
+
+
+# ============================================================
+# 行动队列 (Action Queue)
+# ============================================================
+
+@dataclass
+class ActionItem:
+    """行动项数据结构"""
+    action_id: str
+    description: str
+    priority: float = 0.5
+    status: str = "pending"  # pending / executing / completed / failed
+    trigger_reason: str = ""
+    created_at: str = ""
+    executed_at: str = ""
+    result: str = ""
+
+    def __post_init__(self):
+        if not self.created_at:
+            self.created_at = datetime.now(timezone.utc).isoformat()
+        if not self.action_id:
+            self.action_id = str(uuid.uuid4())[:8]
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "action_id": self.action_id,
+            "description": self.description,
+            "priority": self.priority,
+            "status": self.status,
+            "trigger_reason": self.trigger_reason,
+            "created_at": self.created_at,
+            "executed_at": self.executed_at,
+            "result": self.result,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "ActionItem":
+        return cls(
+            action_id=data.get("action_id", ""),
+            description=data.get("description", ""),
+            priority=data.get("priority", 0.5),
+            status=data.get("status", "pending"),
+            trigger_reason=data.get("trigger_reason", ""),
+            created_at=data.get("created_at", ""),
+            executed_at=data.get("executed_at", ""),
+            result=data.get("result", ""),
+        )
+
+
+class ActionQueue:
+    """
+    行动队列 - 让反思的 next_actions 真正转化为 Agent 的行动
+
+    设计原则：
+    - 反思结果写入行动队列
+    - 静默轮时从队列取出行动执行
+    - 行动执行后记录结果到经历流
+    - 下次反思时评估行动效果
+
+    优先级：
+    - high: 0.7-1.0，立即执行
+    - medium: 0.4-0.7，尽快执行
+    - low: 0.0-0.4，有空时执行
+    """
+
+    def __init__(self, db_path: str = "./castorice_data/action_queue.db", max_actions: int = 100):
+        self.db_path = db_path
+        self.max_actions = max_actions
+        self._lock = threading.Lock()
+        self._init_db()
+
+    def _get_conn(self):
+        import sqlite3
+        import os
+        os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
+        return conn
+
+    def _init_db(self):
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS actions (
+                action_id TEXT PRIMARY KEY,
+                description TEXT NOT NULL,
+                priority REAL DEFAULT 0.5,
+                status TEXT DEFAULT 'pending',
+                trigger_reason TEXT,
+                created_at TEXT NOT NULL,
+                executed_at TEXT,
+                result TEXT
+            )
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_actions_status_priority
+            ON actions(status, priority DESC, created_at)
+        """)
+        conn.commit()
+        conn.close()
+
+    def add_action(
+        self,
+        description: str,
+        priority: float = 0.5,
+        trigger_reason: str = "",
+    ) -> ActionItem:
+        """添加新行动"""
+        import uuid
+        action = ActionItem(
+            action_id=str(uuid.uuid4())[:8],
+            description=description,
+            priority=max(0.0, min(1.0, priority)),
+            trigger_reason=trigger_reason,
+        )
+        with self._lock:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO actions
+                (action_id, description, priority, status, trigger_reason, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                action.action_id,
+                action.description,
+                action.priority,
+                action.status,
+                action.trigger_reason,
+                action.created_at,
+            ))
+            conn.commit()
+            conn.close()
+            logger.info(f"新增行动: {action.action_id} | {description[:50]}")
+        # P2: 避免锁嵌套死锁——cleanup 在锁外执行
+        self._cleanup_excess()
+        return action
+
+    def add_from_reflection(self, reflection_result: ReflectionResult):
+        """从反思结果批量添加行动"""
+        if not reflection_result.next_actions:
+            return 0
+        count = 0
+        for action in reflection_result.next_actions:
+            # 根据反思触发原因设置优先级
+            priority = 0.5
+            if "失败" in reflection_result.trigger_reason:
+                priority = 0.8
+            elif "低置信度" in reflection_result.trigger_reason:
+                priority = 0.7
+            elif "定期" in reflection_result.trigger_reason:
+                priority = 0.4
+            self.add_action(
+                description=action,
+                priority=priority,
+                trigger_reason=f"反思触发: {reflection_result.trigger_reason}",
+            )
+            count += 1
+        return count
+
+    def get_pending_actions(self, limit: int = 5) -> List[ActionItem]:
+        """获取待执行的行动（按优先级排序）"""
+        with self._lock:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM actions WHERE status = 'pending' ORDER BY priority DESC, created_at LIMIT ?",
+                (limit,),
+            )
+            rows = cursor.fetchall()
+            conn.close()
+            return [self._row_to_action(row) for row in rows]
+
+    def get_highest_priority(self) -> Optional[ActionItem]:
+        """获取最高优先级的待执行行动"""
+        pending = self.get_pending_actions(limit=1)
+        return pending[0] if pending else None
+
+    def mark_executed(self, action_id: str, result: str = "") -> bool:
+        """标记行动已执行"""
+        with self._lock:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            cursor.execute(
+                """UPDATE actions SET status = 'executed', executed_at = ?, result = ?
+                   WHERE action_id = ? AND status = 'pending'""",
+                (datetime.now(timezone.utc).isoformat(), result, action_id),
+            )
+            updated = cursor.rowcount > 0
+            conn.commit()
+            conn.close()
+            if updated:
+                logger.info(f"行动已执行: {action_id}")
+            return updated
+
+    def mark_failed(self, action_id: str, reason: str = "") -> bool:
+        """标记行动执行失败"""
+        with self._lock:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            cursor.execute(
+                """UPDATE actions SET status = 'failed', executed_at = ?, result = ?
+                   WHERE action_id = ? AND status = 'pending'""",
+                (datetime.now(timezone.utc).isoformat(), f"失败: {reason}", action_id),
+            )
+            updated = cursor.rowcount > 0
+            conn.commit()
+            conn.close()
+            if updated:
+                logger.info(f"行动执行失败: {action_id} | {reason}")
+            return updated
+
+    def delete_action(self, action_id: str) -> bool:
+        """删除行动"""
+        with self._lock:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM actions WHERE action_id = ?", (action_id,))
+            deleted = cursor.rowcount > 0
+            conn.commit()
+            conn.close()
+            return deleted
+
+    def _cleanup_excess(self):
+        """清理超过限制的旧行动"""
+        with self._lock:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT action_id FROM actions ORDER BY created_at DESC LIMIT -1 OFFSET ?",
+                (self.max_actions,),
+            )
+            rows = cursor.fetchall()
+            if rows:
+                ids = [row[0] for row in rows]
+                placeholders = ",".join("?" * len(ids))
+                cursor.execute(f"DELETE FROM actions WHERE action_id IN ({placeholders})", ids)
+                conn.commit()
+            conn.close()
+
+    def _row_to_action(self, row) -> ActionItem:
+        """SQL行转ActionItem"""
+        return ActionItem(
+            action_id=row[0],
+            description=row[1],
+            priority=row[2],
+            status=row[3],
+            trigger_reason=row[4] or "",
+            created_at=row[5],
+            executed_at=row[6] or "",
+            result=row[7] or "",
+        )
+
+    def to_prompt(self, max_actions: int = 3) -> str:
+        """生成行动队列提示词，注入到 system prompt"""
+        pending = self.get_pending_actions(limit=max_actions)
+        if not pending:
+            return ""
+
+        lines = ["## 待执行行动"]
+        for action in pending:
+            priority_label = "高" if action.priority >= 0.7 else "中" if action.priority >= 0.4 else "低"
+            lines.append(f"- [{priority_label}] {action.description}")
+            if action.trigger_reason:
+                lines.append(f"  触发原因: {action.trigger_reason[:50]}")
+
+        return "\n".join(lines)
+
+    def get_stats(self) -> Dict[str, Any]:
+        """获取行动队列状态"""
+        with self._lock:
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM actions WHERE status = 'pending'")
+            pending = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM actions WHERE status = 'executed'")
+            executed = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM actions WHERE status = 'failed'")
+            failed = cursor.fetchone()[0]
+            conn.close()
+            return {
+                "pending": pending,
+                "executed": executed,
+                "failed": failed,
+                "total": pending + executed + failed,
+            }

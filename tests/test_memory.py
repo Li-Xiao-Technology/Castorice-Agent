@@ -105,7 +105,8 @@ class TestSkillMemory:
         skill = Skill(name="待删除", trigger_keywords=["del"], description="delete", steps=[])
         self.memory.add_or_update(skill)
         assert self.memory.find_by_name("待删除") is not None
-        self.memory.delete("待删除")
+        # delete 方法需要传入 skill_id 而非 name
+        self.memory.delete(skill.id)
         assert self.memory.find_by_name("待删除") is None
 
 

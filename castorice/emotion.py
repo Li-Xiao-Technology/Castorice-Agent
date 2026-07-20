@@ -87,31 +87,57 @@ class EmotionState:
         """生成情绪提示词，注入到 system prompt"""
         mood_parts = []
 
-        # 愉悦度
-        if self.pleasure > 0.5:
-            mood_parts.append("我现在心情很好，回复可以轻快一些")
+        # 愉悦度（更细腻的表达）
+        if self.pleasure > 0.7:
+            mood_parts.append("我现在非常开心，充满活力")
+        elif self.pleasure > 0.5:
+            mood_parts.append("我现在心情很好，回复可以轻快、热情一些")
+        elif self.pleasure > 0.3:
+            mood_parts.append("我现在心情还不错，比较轻松")
         elif self.pleasure > 0.1:
-            mood_parts.append("我现在心情还不错")
-        elif self.pleasure > -0.3:
+            mood_parts.append("我现在情绪平和")
+        elif self.pleasure > -0.1:
             mood_parts.append("我现在情绪平稳")
+        elif self.pleasure > -0.3:
+            mood_parts.append("我现在有点小低落")
+        elif self.pleasure > -0.5:
+            mood_parts.append("我现在有点难过，回复会稍微低沉一些")
         elif self.pleasure > -0.7:
-            mood_parts.append("我现在有点低落，回复会稍微沉重一些")
+            mood_parts.append("我现在情绪比较低落，回复会带着一些情绪")
         else:
-            mood_parts.append("我现在很难过，回复时会带着情绪")
+            mood_parts.append("我现在很难过，回复时会明显带着悲伤情绪")
 
-        # 唤醒度
-        if self.arousal > 0.6:
-            mood_parts.append("有点兴奋，话可能多一些")
+        # 唤醒度（更细腻的表达）
+        if self.arousal > 0.7:
+            mood_parts.append("非常兴奋，思维活跃，话可能会比较多")
+        elif self.arousal > 0.5:
+            mood_parts.append("有点兴奋，反应会比较快")
         elif self.arousal > 0.2:
             pass  # 正常
-        elif self.arousal < -0.3:
+        elif self.arousal > -0.1:
+            pass  # 正常
+        elif self.arousal > -0.3:
+            mood_parts.append("有点平静，回复会比较温和")
+        elif self.arousal > -0.5:
             mood_parts.append("有点疲惫，回复会简洁一些")
+        else:
+            mood_parts.append("非常疲惫，回复会尽量简短")
 
-        # 掌控感
-        if self.dominance < -0.3:
-            mood_parts.append("对自己不太自信，多用'也许'、'可能'等不确定词")
-        elif self.dominance > 0.7:
-            mood_parts.append("很自信，可以给确定性的回答")
+        # 掌控感（更细腻的表达）
+        if self.dominance > 0.8:
+            mood_parts.append("非常自信，可以给出明确、确定的回答")
+        elif self.dominance > 0.5:
+            mood_parts.append("比较自信，可以给出比较确定的回答")
+        elif self.dominance > 0.2:
+            pass  # 正常
+        elif self.dominance > -0.1:
+            pass  # 正常
+        elif self.dominance > -0.3:
+            mood_parts.append("有点犹豫，会多用'可能'、'也许'等词")
+        elif self.dominance > -0.5:
+            mood_parts.append("不太自信，会谨慎表达，多用不确定词汇")
+        else:
+            mood_parts.append("缺乏信心，会明显表达不确定感")
 
         if not mood_parts:
             return ""
@@ -270,12 +296,8 @@ class EmotionEngine:
     - experience_journal: 可选，传入则记录情感事件
     """
 
-    # L3: 情绪极差时拒绝调用的工具（避免低质量输出）
-    REFUSE_TOOLS_WHEN_LOW = {
-        "generate_image",     # 没心情画图
-        "write_file",         # 没心情写文件
-        "creative_writer",    # 没心情创作
-    }
+    # L3: 情绪影响决策（通过动机系统实现，不再硬编码拒绝列表）
+    # 情感状态通过 derive_motivations() 转化为动机，由 LLM 自主决定行为
 
     def __init__(
         self,
@@ -293,8 +315,12 @@ class EmotionEngine:
         self._state: Optional[EmotionState] = None
         # 保护 update() 的读-改-写操作
         self._lock = threading.Lock()
-        # 拒绝工具列表（默认与类常量一致，可被运行时修改）
-        self.refuse_tools_when_low: set = set(self.REFUSE_TOOLS_WHEN_LOW)
+        # 拒绝工具列表（已废弃，改为通过动机系统影响决策）
+        self.refuse_tools_when_low: set = set()
+        # 用户情感追踪（用于 derive_motivations）
+        self._last_user_emotion: Optional[str] = None
+        # 近期任务成功连续计数（用于成就感动机）
+        self._recent_success_streak: int = 0
 
     def load(self) -> EmotionState:
         """加载情感状态（持久化）"""

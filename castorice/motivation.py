@@ -133,3 +133,134 @@ class IntrinsicMotivation:
                 "self_goals": list(self._self_goals),
                 "recent_task_count": len(self._task_history),
             }
+
+    def should_initiate_action(
+        self,
+        seconds_since_last_input: float,
+        emotion_state: Optional[Dict[str, float]] = None,
+        intent_tracker: Any = None,
+        social_relation: Any = None,
+        user_id: str = "",
+    ) -> Dict[str, Any]:
+        """
+        判断是否应该主动发起行为（静默轮）
+
+        :param seconds_since_last_input: 距离上次用户输入的秒数
+        :param emotion_state: 当前情感状态（可选）
+        :param intent_tracker: 意图追踪器（可选，用于检查未完成意图）
+        :return: dict {
+            "should_initiate": bool,
+            "action_type": str,  # "curiosity" | "concern" | "goal_tracking" | "check_in" | "intent_followup"
+            "reason": str,
+            "target": str,  # 主动行为的目标（如好奇的概念、关心的用户状态等）
+        }
+        """
+        with self._lock:
+            # 0. 意图追踪：有未完成的用户意图，主动跟进
+            if intent_tracker and seconds_since_last_input > 300:
+                try:
+                    active_intents = intent_tracker.get_active_intents(limit=5)
+                    if active_intents:
+                        # 优先选择进度较低的意图（还没开始）或中等进度的意图（卡住了）
+                        target_intent = active_intents[0]
+                        if target_intent.progress < 0.3:
+                            reason = "用户有未开始的意图，想主动询问是否需要帮助"
+                        elif 0.3 <= target_intent.progress < 0.7:
+                            reason = "用户的意图进展缓慢，想主动跟进进度"
+                        else:
+                            reason = "用户的意图接近完成，想主动确认是否需要收尾"
+                        return {
+                            "should_initiate": True,
+                            "action_type": "intent_followup",
+                            "reason": reason,
+                            "target": target_intent.root_intent,
+                        }
+                except Exception as e:
+                    logger.debug(f"意图追踪检查失败: {e}")
+
+            # 1. 好奇心驱动：有未解决的好奇概念且用户长时间没说话
+            if self._curiosity_queue and seconds_since_last_input > 120:
+                return {
+                    "should_initiate": True,
+                    "action_type": "curiosity",
+                    "reason": "有未解决的好奇概念，想主动了解",
+                    "target": self._curiosity_queue[0],
+                }
+
+            # 2. 关系维护：用户最近不满且长时间没说话，主动关心
+            if (
+                self._last_user_feedback == "negative"
+                and seconds_since_last_input > 300
+                and self._user_interaction_count > 3
+            ):
+                return {
+                    "should_initiate": True,
+                    "action_type": "concern",
+                    "reason": "用户之前有些不满，想主动关心",
+                    "target": "用户情绪状态",
+                }
+
+            # 3. 目标追踪：有进行中的目标且长时间没进展
+            if self._self_goals and seconds_since_last_input > 600:
+                active_goals = [g for g in self._self_goals if g["progress"] < 1.0]
+                if active_goals:
+                    top_goal = max(active_goals, key=lambda g: g["priority"])
+                    return {
+                        "should_initiate": True,
+                        "action_type": "goal_tracking",
+                        "reason": "有进行中的目标，想更新进展",
+                        "target": top_goal["goal"],
+                    }
+
+            # 4. 日常问候：长时间没说话（超过10分钟），主动打招呼
+            if seconds_since_last_input > 600 and self._user_interaction_count > 10:
+                return {
+                    "should_initiate": True,
+                    "action_type": "check_in",
+                    "reason": "长时间没交流，想主动打招呼",
+                    "target": "日常问候",
+                }
+
+            # S1: 关系驱动的主动行为（关系越深，越倾向主动关心）
+            if social_relation and user_id and seconds_since_last_input > 300:
+                try:
+                    relation = social_relation.get_relation(user_id)
+                    if relation:
+                        # 亲密度越高，主动关心的阈值越低
+                        intimacy = relation.intimacy
+                        if intimacy > 0.6 and seconds_since_last_input > 180:
+                            return {
+                                "should_initiate": True,
+                                "action_type": "relation_care",
+                                "reason": f"与用户关系较好（亲密度{intimacy:.0%}），想主动关心近况",
+                                "target": "关心用户近况",
+                            }
+                        if intimacy > 0.4 and relation.interaction_streak >= 3:
+                            return {
+                                "should_initiate": True,
+                                "action_type": "relation_streak",
+                                "reason": f"连续互动{relation.interaction_streak}天，保持联系节奏",
+                                "target": "延续互动节奏",
+                            }
+                except Exception as e:
+                    logger.debug(f"S1 关系驱动检查失败: {e}")
+
+            # 5. 情感驱动：情绪低落时寻求互动
+            if (
+                emotion_state
+                and emotion_state.get("pleasure", 0) < -0.3
+                and seconds_since_last_input > 180
+            ):
+                return {
+                    "should_initiate": True,
+                    "action_type": "emotion_seeking",
+                    "reason": "心情不太好，想与人交流",
+                    "target": "情感交流",
+                }
+
+            return {
+                "should_initiate": False,
+                "action_type": "",
+                "reason": "",
+                "target": "",
+            }

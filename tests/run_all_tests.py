@@ -7,9 +7,6 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# 新增模块测试
-import test_self_modules
-
 
 def test_tools():
     print("=== 工具模块测试 ===")
@@ -126,7 +123,7 @@ def test_agent_state():
     print("\n=== Agent State 测试 ===")
     from castorice.agent import State
     s = State(user_input="test", session_id="test")
-    assert hasattr(s, "short_term_context")
+    assert hasattr(s, "history_messages")
     assert hasattr(s, "relevant_history")
     assert hasattr(s, "user_profile_context")
     print("15. State 字段完整 - PASS")
@@ -155,12 +152,32 @@ if __name__ == "__main__":
     test_agent_state()
     test_model_adapter()
 
-    # 自感知、自组织、元认知模块测试
+    # pytest 风格测试文件（统一风格，包含意图追踪、社会关系、自传式记忆、安全层等）
     print("\n" + "=" * 40)
-    self_modules_ok = test_self_modules.main()
+    print("  运行 pytest 风格测试套件")
+    print("=" * 40)
 
-    if not self_modules_ok:
-        sys.exit(1)
+    import pytest
+
+    pytest_files = [
+        "tests/test_self_modules.py",
+        "tests/test_emotion.py",
+        "tests/test_reflection.py",
+        "tests/test_model_adapter.py",
+        "tests/test_intent_tracker.py",
+        "tests/test_social_relation.py",
+        "tests/test_autobiographical.py",
+        "tests/test_memory.py",
+        "tests/test_tools.py",
+        "tests/test_security_file_guard.py",
+        "tests/test_security_pattern_detector.py",
+        "tests/test_security_rollback.py",
+        "tests/test_security_authorization.py",
+    ]
+
+    exit_code = pytest.main(pytest_files + ["-v", "--tb=short"])
+    if exit_code != 0:
+        sys.exit(exit_code)
 
     print("\n" + "=" * 40)
     print("  所有测试通过！")

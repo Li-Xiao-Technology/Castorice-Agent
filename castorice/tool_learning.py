@@ -11,6 +11,7 @@ P3.2: 工具调用自我学习
 - 检索基于输入描述的语义相似度
 - 失败案例不参与推荐（避免学习错误模式）
 """
+import json
 import logging
 import threading
 import time
@@ -94,17 +95,25 @@ class ToolCallMemory:
         tool_name: str,
         input_description: str,
         top_k: int = 3,
+        model_adapter: Any = None,
     ) -> Optional[Dict[str, Any]]:
         """
-        P3.2: 基于历史记录推荐参数
+        P3.2: 基于历史记录推荐参数（优先 LLM 推断，回退统计方法）
 
         如果最相似的历史调用有相同的参数模式，返回推荐参数。
+        当提供 model_adapter 时，使用 LLM 智能推断参数，否则使用词频统计。
         """
         similar = self.find_similar(tool_name, input_description, top_k=top_k)
         if not similar:
             return None
 
-        # 取 top_k 记录的 args，统计频率
+        # P3.2: 如果有模型适配器，使用 LLM 智能推断参数
+        if model_adapter is not None:
+            return self._llm_suggest_arguments(
+                tool_name, input_description, similar, model_adapter
+            )
+
+        # 回退：词频统计方法
         arg_keys_count: Dict[str, int] = {}
         arg_values: Dict[str, Dict[str, int]] = {}
 
@@ -116,17 +125,70 @@ class ToolCallMemory:
                 v_str = str(v)
                 arg_values[k][v_str] = arg_values[k].get(v_str, 0) + 1
 
-        # 构造推荐 args（仅保留出现频率 >= 50% 的 key）
         threshold = max(1, len(similar) // 2)
         suggested = {}
         for k, count in arg_keys_count.items():
             if count >= threshold:
-                # 取该 key 下最常见的 value
                 if k in arg_values and arg_values[k]:
                     best_value = max(arg_values[k], key=arg_values[k].get)
                     suggested[k] = best_value
 
         return suggested if suggested else None
+
+    def _llm_suggest_arguments(
+        self,
+        tool_name: str,
+        input_description: str,
+        similar_records: List[Dict[str, Any]],
+        model_adapter: Any,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        P3.2: 使用 LLM 智能推断工具参数
+
+        基于历史成功案例和当前输入描述，让 LLM 推断最合适的参数值。
+        """
+        from castorice.model_adapter import ChatMessage
+        from castorice.utils import extract_json
+
+        records_desc = "\n".join(
+            f"- 输入: {r['desc']}\n  参数: {json.dumps(r['args'], ensure_ascii=False)}\n  结果: {r['result_summary']}"
+            for r in similar_records
+        )
+
+        prompt = f"""你是工具参数推荐专家。请根据以下信息，为工具「{tool_name}」推断合适的参数。
+
+【当前用户输入】
+{input_description}
+
+【历史成功案例】
+{records_desc}
+
+【任务】
+分析当前用户输入与历史案例的相似性，推断应该使用哪些参数。
+如果历史案例的参数模式可以复用，直接推荐；如果需要调整，给出调整后的参数。
+
+【输出格式】
+只返回 JSON：{{"arguments": {{"参数名": "值"}}, "reasoning": "推荐理由"}}
+
+注意：
+- 参数值要具体，不要留空或使用占位符
+- 只推荐与当前输入相关的参数
+- 如果无法推断，返回空的 arguments"""
+
+        try:
+            response = model_adapter.chat([
+                ChatMessage("system", "你是工具参数推荐专家，只输出 JSON。"),
+                ChatMessage("user", prompt),
+            ])
+            parsed = extract_json(response.content)
+            args = parsed.get("arguments", {})
+            if args:
+                logger.info(f"P3.2 LLM 参数推荐: {tool_name} -> {json.dumps(args, ensure_ascii=False)}")
+                return args
+        except Exception as e:
+            logger.debug(f"P3.2 LLM 参数推荐失败，回退统计方法: {e}")
+
+        return None
 
     def get_stats(self) -> Dict[str, Any]:
         """获取学习统计"""
