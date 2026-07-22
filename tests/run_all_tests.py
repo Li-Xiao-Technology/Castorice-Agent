@@ -160,6 +160,7 @@ if __name__ == "__main__":
     import pytest
 
     pytest_files = [
+        "tests/test_agent_core.py",
         "tests/test_self_modules.py",
         "tests/test_emotion.py",
         "tests/test_reflection.py",

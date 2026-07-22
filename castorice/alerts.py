@@ -92,6 +92,23 @@ def _get_shared_httpx_client():
     return _shared_http_client
 
 
+def close_alert_http_client() -> None:
+    """关闭共享的 httpx.Client（程序退出时调用）"""
+    global _shared_http_client
+    with _http_client_lock:
+        if _shared_http_client is not None:
+            try:
+                _shared_http_client.close()
+            except Exception:
+                pass
+            _shared_http_client = None
+
+
+# 程序退出时自动关闭共享连接池
+import atexit
+atexit.register(close_alert_http_client)
+
+
 class DingTalkChannel(AlertChannel):
     """钉钉机器人告警渠道"""
 

@@ -673,7 +673,7 @@ class SelfAwareness:
     # P0.2: 认知健康度指标（防止认知层面的自我崩溃）
     # ============================================================
 
-    def record_cognitive_event(self, event_type: str, payload: dict = None) -> None:
+    def record_cognitive_event(self, event_type: str, payload: Optional[Dict[str, Any]] = None) -> None:
         """
         P0.2: 记录一次认知事件（自我概念更新、记忆删除、行为策略改变等）
 

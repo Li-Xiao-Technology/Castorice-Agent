@@ -295,8 +295,10 @@ class LongTermMemory(MemoryInterface):
             if where:
                 query_kwargs["where"] = where
             results = self._collection.query(**query_kwargs)
-            docs = results.get("documents", [[]])[0]
-            distances = results.get("distances", [[]])[0]
+            _docs = results.get("documents")
+            docs = _docs[0] if _docs and len(_docs) > 0 else []
+            _distances = results.get("distances")
+            distances = _distances[0] if _distances and len(_distances) > 0 else []
             if not docs:
                 return ""
 
@@ -342,9 +344,12 @@ class LongTermMemory(MemoryInterface):
             if where:
                 query_kwargs["where"] = where
             results = self._collection.query(**query_kwargs)
-            docs = results.get("documents", [[]])[0]
-            metadatas = results.get("metadatas", [[]])[0]
-            distances = results.get("distances", [[]])[0]
+            _docs = results.get("documents")
+            docs = _docs[0] if _docs and len(_docs) > 0 else []
+            _metadatas = results.get("metadatas")
+            metadatas = _metadatas[0] if _metadatas and len(_metadatas) > 0 else []
+            _distances = results.get("distances")
+            distances = _distances[0] if _distances and len(_distances) > 0 else []
 
             # P1-1: 按相似度过滤
             output = []
@@ -418,3 +423,45 @@ class LongTermMemory(MemoryInterface):
                     self._init_attempted = True
                     self._try_init_with_retry()
         return self._available
+
+    def get_recent(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """获取最近添加的记忆（按时间倒序）"""
+        if not self._ensure_available():
+            return []
+        try:
+            all_data = self._collection.get()
+            if not all_data:
+                return []
+            ids = all_data.get("ids", [])
+            documents = all_data.get("documents", [])
+            metadatas = all_data.get("metadatas", [])
+            results = []
+            for i, doc in enumerate(documents):
+                results.append({
+                    "id": ids[i] if i < len(ids) else None,
+                    "text": doc,
+                    "metadata": metadatas[i] if i < len(metadatas) else {},
+                })
+            results.sort(
+                key=lambda x: x["metadata"].get("timestamp", 0),
+                reverse=True,
+            )
+            return results[:limit]
+        except Exception as e:
+            logger.warning(f"获取最近记忆失败: {e}")
+            return []
+
+    def delete(self, memory_id: str) -> bool:
+        """删除指定 ID 的记忆"""
+        if not self._ensure_available():
+            return False
+        try:
+            self._collection.delete(ids=[memory_id])
+            return True
+        except Exception as e:
+            logger.warning(f"删除记忆失败: {e}")
+            return False
+
+    def close(self) -> None:
+        """关闭长期记忆连接（ChromaDB PersistentClient 随进程退出自动持久化）"""
+        pass

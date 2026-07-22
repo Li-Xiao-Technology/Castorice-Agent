@@ -79,7 +79,7 @@ class ToolLoopMixin:
                     content = response.content.strip()
                     tool_calls = self._parse_json_tool_calls(content)
                     if not tool_calls:
-                        decision = extract_json(content)
+                        decision = extract_json(content) or {}
                         if decision.get("action") == "answer":
                             state.final_answer = decision.get("answer", content)
                             state.success = True
@@ -268,6 +268,42 @@ class ToolLoopMixin:
         except Exception as e:
             logger.warning(f"L3 情绪拒绝检查失败: {e}")
 
+        # 4. 渐进授权检查
+        try:
+            from castorice.security.authorization import get_authorization
+            auth = get_authorization()
+            op_key = f"tool.{tool_name}"
+            allowed, reason = auth.is_allowed(op_key)
+            if not allowed:
+                refuse_reason = f"[权限不足] {reason}"
+                logger.warning(f"P3.1 工具调用被拒绝: {tool_name} - {reason}")
+                if use_native_fc:
+                    return ChatMessage(
+                        role="tool", content=refuse_reason,
+                        tool_call_id=tc_id, name=tool_name,
+                    )
+                else:
+                    return ChatMessage("user", refuse_reason + " 请直接用你自己的话回答用户。")
+        except Exception as e:
+            logger.warning(f"P3.1 授权检查失败: {e}")
+
+        # 5. 模式检测记录（操作前）
+        try:
+            from castorice.security.pattern_detector import get_pattern_detector
+            detector = get_pattern_detector()
+            if tool_name in ("read_file", "read_document"):
+                detector.record("file_read", str(tool_args))
+            elif tool_name == "write_file":
+                detector.record("file_write", str(tool_args.get("file_path", "")))
+            elif tool_name == "terminal":
+                detector.record("shell_exec", str(tool_args.get("command", "")))
+            elif tool_name == "python_repl":
+                detector.record("shell_exec", f"python_repl: {str(tool_args.get('code', ''))[:100]}")
+            elif tool_name in ("web_search", "web_fetch", "get_weather"):
+                detector.record("network_send", str(tool_args))
+        except Exception as e:
+            logger.warning(f"P3.3 模式检测记录失败: {e}")
+
         # 3. 执行工具
         try:
             t_tool = time.time()
@@ -314,6 +350,14 @@ class ToolLoopMixin:
                 success=True,
             )
 
+            # P3.1: 记录授权操作结果（成功）
+            try:
+                from castorice.security.authorization import get_authorization
+                auth = get_authorization()
+                auth.record_outcome(f"tool.{tool_name}", success=True)
+            except Exception as e:
+                pass
+
             if use_native_fc:
                 return ChatMessage(
                     role="tool", content=result_str,
@@ -344,6 +388,14 @@ class ToolLoopMixin:
                 latency_ms=0,
                 error_msg=str(e),
             )
+
+            # P3.1: 记录授权操作结果（失败）
+            try:
+                from castorice.security.authorization import get_authorization
+                auth = get_authorization()
+                auth.record_outcome(f"tool.{tool_name}", success=False)
+            except Exception as e:
+                pass
 
             audit = _get_audit_logger()
             if audit:

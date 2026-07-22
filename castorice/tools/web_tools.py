@@ -16,7 +16,8 @@
 
 import re
 from typing import Dict, Any, List, Optional
-from .base_tools import register_tool, _get_httpx_client
+from .base_tools import register_tool
+from castorice.http_client import get_http_client as _get_httpx_client
 
 # ========== 网页内容抓取 ==========
 
@@ -630,12 +631,12 @@ def _anime_season(year: str = "", season: str = "") -> str:
     使用 AniList GraphQL API 查询当季新番
     """
     try:
-        from datetime import datetime
+        from datetime import datetime, timezone
         client = _get_httpx_client()
 
         # 如果没有指定年份和季度，使用当前时间计算
         if not year or not season:
-            now = datetime.now()
+            now = datetime.now(timezone.utc).astimezone()
             year = year or str(now.year)
             if not season:
                 month = now.month

@@ -15,21 +15,12 @@ import subprocess
 import re
 from typing import Dict, Any, List, Optional, Union, get_type_hints, get_origin, get_args
 
-_httpx_client = None
+from castorice.http_client import get_http_client
 
 
 def _get_httpx_client():
     """获取单例 httpx.Client（带浏览器 User-Agent，避免被 API 拦截）"""
-    global _httpx_client
-    if _httpx_client is None:
-        import httpx
-        _httpx_client = httpx.Client(
-            timeout=15,
-            headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            },
-        )
-    return _httpx_client
+    return get_http_client()
 
 
 _SENSITIVE_FILE_PATTERNS = [
@@ -526,6 +517,12 @@ def _write_file(file_path: str, content: str, allowed_paths: Optional[List[str]]
         if not _is_path_safe(file_path, allowed_paths):
             return f"[BLOCKED] 文件路径不在白名单中或为敏感文件: {file_path}"
 
+        from castorice.security.file_guard import get_file_guard
+        guard = get_file_guard()
+        allowed, reason = guard.check_write_allowed(file_path, content)
+        if not allowed:
+            return f"[BLOCKED] {reason}"
+
         os.makedirs(os.path.dirname(os.path.abspath(file_path)) or ".", exist_ok=True)
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(content)
@@ -563,6 +560,12 @@ def _terminal(command: str, timeout: int = 30) -> str:
     stripped = command.strip()
     if not stripped:
         return "[BLOCKED] 命令不能为空"
+
+    from castorice.security.file_guard import get_file_guard
+    guard = get_file_guard()
+    allowed, reason = guard.check_command_allowed(command)
+    if not allowed:
+        return f"[BLOCKED] {reason}"
 
     cmd_parts = stripped.split()
     cmd_prefix = cmd_parts[0].lower() if cmd_parts else ""
@@ -652,6 +655,38 @@ _DANGEROUS_PATTERNS = [
     "socket.", "urllib.", "http.", "requests.", "shutil.", "pathlib.",
 ]
 
+
+def _is_code_safe_ast(code: str) -> tuple:
+    """
+    AST 级安全扫描：检测危险名称、属性、import 语句。
+    可防御字符串拼接绕过（如 "ope" + "n("）。
+    """
+    import ast
+    try:
+        tree = ast.parse(code)
+    except SyntaxError as e:
+        return False, f"语法错误: {e}"
+
+    dangerous_names = {
+        "__import__", "__subclasses__", "__bases__", "__globals__",
+        "__code__", "open", "exec", "eval", "compile", "subprocess",
+        "os", "sys", "socket", "urllib", "http", "requests", "shutil",
+        "pathlib", "importlib", "builtins", "__builtins__",
+    }
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            return False, "禁止 import 语句"
+        if isinstance(node, ast.Name):
+            if node.id in dangerous_names:
+                return False, f"检测到危险名称: {node.id}"
+        if isinstance(node, ast.Attribute):
+            if node.attr in dangerous_names:
+                return False, f"检测到危险属性: {node.attr}"
+
+    return True, ""
+
+
 @register_tool(
     name="python_repl",
     description="执行 Python 代码片段(安全受限沙箱,无文件系统和网络访问)。参数: code(必填,Python 代码)",
@@ -665,12 +700,17 @@ def _python_repl(code: str, timeout: int = 30) -> str:
     - 使用白名单内置函数，无文件系统和网络访问
     - 无 __import__、open、exec、eval 等危险函数
     - 保留 stdout 重定向捕获输出功能
+    - 双层防护：字符串模式匹配 + AST 语法树扫描
     """
     code_lower = code.lower()
     for pattern in _DANGEROUS_PATTERNS:
         if pattern in code_lower:
             return f"[安全拦截] 检测到危险代码模式: {pattern}"
-    
+
+    safe_ast, ast_reason = _is_code_safe_ast(code)
+    if not safe_ast:
+        return f"[安全拦截] {ast_reason}"
+
     try:
         import sys
         from io import StringIO
@@ -731,7 +771,7 @@ def _get_current_time() -> str:
     from datetime import datetime, timezone
     
     now = datetime.now(timezone.utc)
-    local_now = datetime.now()
+    local_now = datetime.now().astimezone()
     
     return (
         f"当前时间（UTC）: {now.strftime('%Y-%m-%d %H:%M:%S')} UTC\n"
@@ -781,7 +821,7 @@ def get_base_tools(config: Optional[Dict[str, Any]] = None) -> List[Tool]:
                     "anime_search", "anime_season",
                     "vrchat_search", "vrchat_popular_worlds",
                     "vrchat_user_status", "vrchat_world_info",
-                    "generate_image",
+                    "generate_image", "analyze_image", "extract_text_from_image",
                     "pixiv_search", "pixiv_popular", "pixiv_user_works"]:
             tool_cfg = tools_cfg.get(key, {})
             if isinstance(tool_cfg, dict):
@@ -845,7 +885,7 @@ def get_base_tools(config: Optional[Dict[str, Any]] = None) -> List[Tool]:
                  "anime_search", "anime_season",
                  "vrchat_search", "vrchat_popular_worlds",
                  "vrchat_user_status", "vrchat_world_info",
-                 "generate_image",
+                 "generate_image", "analyze_image", "extract_text_from_image",
                  "pixiv_search", "pixiv_popular", "pixiv_user_works"]:
         if is_enabled(name) and name in _registered_tools:
             all_tools.append(_registered_tools[name])

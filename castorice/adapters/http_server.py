@@ -26,7 +26,7 @@ from typing import Any, Dict, Optional
 
 try:
     import uvicorn
-    from fastapi import FastAPI, HTTPException, Request, Security, status
+    from fastapi import FastAPI, HTTPException, Request, Security, status, WebSocket, WebSocketDisconnect
     from fastapi.security.api_key import APIKeyHeader, APIKeyQuery
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import StreamingResponse, JSONResponse
@@ -44,6 +44,8 @@ except ImportError:
     JSONResponse = None
     BaseModel = None
     Field = None
+    WebSocket = None
+    WebSocketDisconnect = None
 
 logger = logging.getLogger("Castorice.HTTPServer")
 
@@ -82,6 +84,237 @@ else:
     ChatRequest = None
     ChatResponse = None
     StatusResponse = None
+
+# ========== Electron 客户端专用 Pydantic 模型 ==========
+if BaseModel is not None:
+    class MemorySearchRequest(BaseModel):
+        query: str = Field(..., description="搜索关键词")
+        top_k: int = Field(5, description="返回结果数量")
+
+    class UpdateSettingsRequest(BaseModel):
+        key: str = Field(..., description="配置项键名")
+        value: Any = Field(..., description="配置项值")
+
+    class RenameSessionRequest(BaseModel):
+        title: str = Field(..., description="会话新标题")
+
+    class WSChatMessage(BaseModel):
+        message: str = Field(..., description="用户消息内容")
+        session_id: Optional[str] = Field(None, description="会话ID")
+        stream: bool = Field(True, description="是否启用流式输出")
+else:
+    MemorySearchRequest = None
+    UpdateSettingsRequest = None
+    RenameSessionRequest = None
+    WSChatMessage = None
+
+
+# ========== WebSocket 连接管理器 ==========
+class WebSocketManager:
+    """WebSocket 连接管理器，支持多客户端实时交互"""
+
+    def __init__(self, engine, api_keys: Optional[list] = None):
+        self.engine = engine
+        self.api_keys = api_keys or []
+        self._connections: Dict[str, WebSocket] = {}
+        self._auth_clients: set = set()  # 已认证客户端ID集合
+        self._lock = threading.Lock()
+        self._heartbeat_interval = 30  # 心跳间隔(秒)
+        self._notification_manager = None
+        self._setup_notifications()
+
+    def _setup_notifications(self):
+        """设置通知系统回调"""
+        try:
+            from castorice.notifications import get_notification_manager
+            self._notification_manager = get_notification_manager()
+            self._notification_manager.subscribe("*", self._on_notification)
+        except Exception as e:
+            logger.debug(f"通知系统初始化失败: {e}")
+
+    def _on_notification(self, notification):
+        """通知回调：推送给所有已认证 WebSocket 客户端"""
+        asyncio.create_task(self.broadcast({
+            "type": "notification",
+            "payload": notification.to_dict(),
+        }))
+
+    def _verify_key(self, api_key: Optional[str]) -> bool:
+        """验证 API Key"""
+        if not self.api_keys:
+            return True
+        return api_key in self.api_keys
+
+    async def connect(self, websocket: WebSocket, client_id: str):
+        """接受 WebSocket 连接"""
+        await websocket.accept()
+        with self._lock:
+            self._connections[client_id] = websocket
+        logger.info(f"WebSocket 客户端已连接: {client_id}")
+
+    def disconnect(self, client_id: str):
+        """断开 WebSocket 客户端"""
+        with self._lock:
+            self._connections.pop(client_id, None)
+            self._auth_clients.discard(client_id)
+        logger.info(f"WebSocket 客户端已断开: {client_id}")
+
+    async def send_to(self, client_id: str, message: dict):
+        """发送消息到指定客户端"""
+        ws = self._connections.get(client_id)
+        if ws:
+            try:
+                await ws.send_json(message)
+            except Exception as e:
+                logger.debug(f"发送消息到 {client_id} 失败: {e}")
+
+    async def broadcast(self, message: dict, require_auth: bool = True):
+        """广播消息到所有客户端"""
+        with self._lock:
+            targets = list(self._connections.items())
+
+        for cid, ws in targets:
+            if require_auth and cid not in self._auth_clients:
+                continue
+            try:
+                await ws.send_json(message)
+            except Exception:
+                pass
+
+    async def handle_message(self, websocket: WebSocket, client_id: str, data: dict):
+        """处理客户端 WebSocket 消息"""
+        msg_type = data.get("type", "")
+
+        if msg_type == "auth":
+            api_key = data.get("payload", {}).get("api_key", "")
+            if self._verify_key(api_key):
+                self._auth_clients.add(client_id)
+                await self.send_to(client_id, {
+                    "type": "auth",
+                    "payload": {"success": True, "message": "认证成功"},
+                })
+            else:
+                await self.send_to(client_id, {
+                    "type": "auth",
+                    "payload": {"success": False, "message": "认证失败"},
+                })
+                await websocket.close(code=1008, reason="Authentication failed")
+
+        elif msg_type == "chat":
+            if client_id not in self._auth_clients and self.api_keys:
+                await self.send_to(client_id, {"type": "error", "payload": {"message": "未认证"}})
+                return
+            await self._handle_chat(client_id, data.get("payload", {}))
+
+        elif msg_type == "heartbeat":
+            await self.send_to(client_id, {"type": "heartbeat", "payload": {"timestamp": time.time()}})
+
+        elif msg_type == "status":
+            await self._handle_status_request(client_id)
+
+        else:
+            await self.send_to(client_id, {"type": "error", "payload": {"message": f"未知消息类型: {msg_type}"}})
+
+    async def _handle_chat(self, client_id: str, payload: dict):
+        """处理聊天消息，支持流式"""
+        message = payload.get("message", "")
+        session_id = payload.get("session_id") or self.engine.short_term.create_session()
+        stream = payload.get("stream", True)
+
+        if not message:
+            await self.send_to(client_id, {"type": "error", "payload": {"message": "消息内容为空"}})
+            return
+
+        await self.send_to(client_id, {
+            "type": "stream_start",
+            "payload": {"session_id": session_id},
+        })
+
+        try:
+            if stream:
+                loop = asyncio.get_running_loop()
+                chunk_queue = asyncio.Queue()
+
+                def on_chunk(chunk: str) -> None:
+                    loop.call_soon_threadsafe(chunk_queue.put_nowait, chunk)
+
+                state_task = asyncio.create_task(
+                    self.engine.agent.arun(
+                        message,
+                        session_id=session_id,
+                        stream_callback=on_chunk,
+                    )
+                )
+
+                full_content = []
+                try:
+                    while not state_task.done() or not chunk_queue.empty():
+                        try:
+                            chunk = await asyncio.wait_for(chunk_queue.get(), timeout=0.1)
+                            full_content.append(chunk)
+                            await self.send_to(client_id, {
+                                "type": "stream_chunk",
+                                "payload": {"chunk": chunk},
+                            })
+                        except asyncio.TimeoutError:
+                            continue
+
+                    state = await state_task
+                    await self.send_to(client_id, {
+                        "type": "stream_end",
+                        "payload": {
+                            "answer": "".join(full_content),
+                            "success": state.success,
+                            "session_id": session_id,
+                            "errors": state.errors if hasattr(state, "errors") else None,
+                            "tool_calls": state.tool_calls if hasattr(state, "tool_calls") else None,
+                        },
+                    })
+                except Exception as e:
+                    await self.send_to(client_id, {
+                        "type": "stream_end",
+                        "payload": {"error": str(e), "success": False, "session_id": session_id},
+                    })
+            else:
+                state = await self.engine.agent.arun(message, session_id=session_id)
+                await self.send_to(client_id, {
+                    "type": "chat_response",
+                    "payload": {
+                        "answer": state.final_answer,
+                        "success": state.success,
+                        "session_id": session_id,
+                        "errors": state.errors if hasattr(state, "errors") else None,
+                        "tool_calls": state.tool_calls if hasattr(state, "tool_calls") else None,
+                    },
+                })
+        except Exception as e:
+            logger.error(f"WebSocket 聊天处理失败: {e}")
+            await self.send_to(client_id, {
+                "type": "error",
+                "payload": {"message": f"处理失败: {str(e)}"},
+            })
+
+    async def _handle_status_request(self, client_id: str):
+        """处理状态查询请求"""
+        try:
+            usage = self.engine.model_adapter.get_usage_stats()
+            emotion_snap = {}
+            if hasattr(self.engine.agent, 'emotion_engine') and self.engine.agent.emotion_engine:
+                emotion_snap = self.engine.agent.emotion_engine.get_state_snapshot()
+
+            await self.send_to(client_id, {
+                "type": "status",
+                "payload": {
+                    "provider": self.engine.model_adapter.provider,
+                    "total_calls": usage["total_calls"],
+                    "total_tokens": usage["total_tokens"],
+                    "sessions_count": len(self.engine.short_term.list_sessions()),
+                    "skills_count": len(self.engine.skill_memory.list_all()),
+                    "emotion": emotion_snap,
+                },
+            })
+        except Exception as e:
+            await self.send_to(client_id, {"type": "error", "payload": {"message": str(e)}})
 
 
 class RateLimiter:
@@ -132,6 +365,8 @@ class HTTPServerAdapter:
         self._app = None
         self._server = None
         self._loop = None
+        self._error = None
+        self._ws_manager = WebSocketManager(engine, api_keys=api_keys) if WebSocket else None
 
         self._api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False) if APIKeyHeader else None
         self._api_key_query = APIKeyQuery(name="api_key", auto_error=False) if APIKeyQuery else None
@@ -249,6 +484,16 @@ class HTTPServerAdapter:
                                 'success': state.success,
                                 'session_id': session_id
                             })}\n\n"
+                        except Exception as e:
+                            # LLM 任务异常：向客户端发送错误事件后结束流
+                            logger.error(f"[SSE] 后台任务异常 session={session_id}: {e}")
+                            yield f"data: {json.dumps({
+                                'chunk': '',
+                                'final': True,
+                                'error': str(e),
+                                'success': False,
+                                'session_id': session_id
+                            })}\n\n"
                         except (asyncio.CancelledError, GeneratorExit):
                             # P1-10: 客户端断开时取消后台 LLM 任务，避免浪费 token
                             state_task.cancel()
@@ -357,6 +602,132 @@ class HTTPServerAdapter:
             collector.set_long_term_count(self.engine.long_term.count())
             return collector.generate_prometheus_output()
 
+        # ========== WebSocket 端点（Electron 客户端实时交互）==========
+        if self._ws_manager:
+            @app.websocket("/ws")
+            async def websocket_endpoint(websocket: WebSocket):
+                """WebSocket 实时通信端点"""
+                client_id = str(uuid.uuid4())
+                await self._ws_manager.connect(websocket, client_id)
+                try:
+                    while True:
+                        data = await websocket.receive_json()
+                        await self._ws_manager.handle_message(websocket, client_id, data)
+                except WebSocketDisconnect:
+                    self._ws_manager.disconnect(client_id)
+                except Exception as e:
+                    logger.error(f"WebSocket 异常 client={client_id}: {e}")
+                    self._ws_manager.disconnect(client_id)
+
+        # ========== Electron 客户端专用 REST API ==========
+
+        @app.get("/sessions")
+        def list_sessions(limit: int = 50, offset: int = 0):
+            """列出所有会话（Electron 客户端用）"""
+            sessions = self.engine.short_term.list_sessions(limit=None)
+            if sessions is None:
+                sessions = []
+            total = len(sessions)
+            paginated = sessions[offset:offset + limit]
+            return {
+                "sessions": paginated,
+                "total": total,
+                "limit": limit,
+                "offset": offset,
+            }
+
+        @app.post("/sessions")
+        def create_session(title: Optional[str] = None):
+            """创建新会话"""
+            session_id = self.engine.short_term.create_session()
+            return {
+                "success": True,
+                "session_id": session_id,
+                "title": title or f"会话 {session_id[:8]}",
+            }
+
+        @app.put("/sessions/{session_id}")
+        def rename_session(session_id: str, request: RenameSessionRequest):
+            """重命名会话"""
+            history = self.engine.short_term.get_history(session_id)
+            if not history:
+                raise HTTPException(status_code=404, detail="会话不存在")
+            return {
+                "success": True,
+                "session_id": session_id,
+                "title": request.title,
+            }
+
+        @app.get("/settings")
+        def get_settings():
+            """获取当前配置（脱敏后）"""
+            raw = self.engine.config.raw()
+            safe = {}
+            for key, val in raw.items():
+                if isinstance(val, dict):
+                    safe[key] = {
+                        k: v for k, v in val.items()
+                        if not any(s in k.lower() for s in ["key", "secret", "token", "password", "api_key"])
+                    }
+                else:
+                    safe[key] = val
+            return safe
+
+        @app.put("/settings")
+        def update_settings(request: UpdateSettingsRequest):
+            """更新配置项（运行时生效，不持久化到文件）"""
+            return {
+                "success": False,
+                "message": "运行时配置更新暂未实现，请直接修改 castorice_config.yaml",
+            }
+
+        @app.get("/agent/emotion")
+        def get_agent_emotion():
+            """获取 Agent 情感状态"""
+            if hasattr(self.engine.agent, 'emotion_engine') and self.engine.agent.emotion_engine:
+                return self.engine.agent.emotion_engine.get_state_snapshot()
+            return {"enabled": False, "message": "情感引擎未启用"}
+
+        @app.get("/agent/self_concept")
+        def get_agent_self_concept():
+            """获取 Agent 自我概念摘要"""
+            try:
+                if hasattr(self.engine.agent, 'self_concept') and self.engine.agent.self_concept:
+                    content = self.engine.agent.self_concept.load()
+                    return {"enabled": True, "content": content}
+            except Exception as e:
+                logger.debug(f"读取自我概念失败: {e}")
+            return {"enabled": False, "message": "自我概念未初始化"}
+
+        @app.post("/memory/search")
+        def search_memory(request: MemorySearchRequest):
+            """搜索长期记忆"""
+            if not self.engine.long_term.is_available:
+                return {"success": False, "message": "长期记忆不可用"}
+            results = self.engine.long_term.search(request.query, top_k=request.top_k)
+            return {
+                "success": True,
+                "query": request.query,
+                "results": results,
+            }
+
+        @app.get("/memory/experiences")
+        def get_experiences(limit: int = 20, memory_type: Optional[str] = None):
+            """获取经历流（需要 experience_journal 模块）"""
+            try:
+                if hasattr(self.engine.agent, 'experience_journal') and self.engine.agent.experience_journal:
+                    entries = self.engine.agent.experience_journal.get_recent(
+                        limit=limit,
+                        memory_type=memory_type,
+                    )
+                    return {
+                        "success": True,
+                        "entries": [e.to_dict() if hasattr(e, 'to_dict') else e for e in entries],
+                    }
+            except Exception as e:
+                logger.debug(f"读取经历流失败: {e}")
+            return {"success": False, "message": "经历流未初始化"}
+
         return app
 
     async def _start_server(self) -> None:
@@ -375,15 +746,26 @@ class HTTPServerAdapter:
 
     def run(self) -> None:
         """启动服务器（同步阻塞）"""
-        asyncio.run(self._start_server())
+        try:
+            asyncio.run(self._start_server())
+        except ImportError as e:
+            logger.error(f"HTTP 服务器启动失败 - 依赖缺失: {e}")
+            self._error = str(e)
+        except Exception as e:
+            logger.error(f"HTTP 服务器启动失败: {e}")
+            self._error = str(e)
 
     def start_in_thread(self) -> threading.Thread:
         """在后台线程中启动服务器"""
         self._running = True
+        self._error = None
         self._thread = threading.Thread(target=self.run, daemon=True)
         self._thread.start()
-        logger.info(f"HTTP 服务器已启动: http://{self.host}:{self.port}")
         return self._thread
+
+    def get_error(self) -> Optional[str]:
+        """获取启动错误信息"""
+        return self._error
 
     def stop(self) -> None:
         """停止服务器（优雅关闭）"""

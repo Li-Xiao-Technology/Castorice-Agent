@@ -537,6 +537,27 @@ class CastoriceAgent(PromptBuilderMixin, ToolLoopMixin, MemoryOpsMixin):
             self.self_awareness.record_task, user_input, success=state.success, elapsed_ms=elapsed_ms
         )
 
+        # P3.4: 回滚管理器 - 记录任务结果并检查是否需要回滚
+        try:
+            from castorice.security.rollback import get_rollback_manager
+            rollback_mgr = get_rollback_manager()
+            rollback_mgr.record_task(state.success)
+            for err in state.errors:
+                rollback_mgr.record_error(err)
+            should_rollback, reason = rollback_mgr.should_rollback()
+            if should_rollback:
+                logger.warning(f"P3.4 触发自动回滚: {reason}")
+                rolled_back_items = []
+                if hasattr(self, 'self_concept') and hasattr(self.self_concept, 'revert'):
+                    try:
+                        self.self_concept.revert()
+                        rolled_back_items.append("self_concept")
+                    except Exception:
+                        pass
+                rollback_mgr.mark_rollback(reason, rolled_back_items)
+        except Exception as e:
+            logger.warning(f"P3.4 回滚检查失败: {e}")
+
         # 元认知：生成反思
         tool_results = [tc["result"] for tc in state.tool_calls]
         # P0-2: 追加本轮最终答案到 previous_answers，供元认知一致性检测使用
@@ -877,7 +898,7 @@ class CastoriceAgent(PromptBuilderMixin, ToolLoopMixin, MemoryOpsMixin):
         workflow = self.workflows.get(workflow_name, {})
         return workflow.get("steps", ["intent", "tool_loop", "answer", "reflection", "memory", "skill"])
 
-    async def _execute_step(self, step: str, state: State, stream_callback: callable = None) -> None:
+    async def _execute_step(self, step: str, state: State, stream_callback: Optional[Callable[[str], None]] = None) -> None:
         """执行单个步骤（支持同步和异步步骤）"""
         step_map = {
             "intent": self._step_intent,
@@ -1060,7 +1081,7 @@ class CastoriceAgent(PromptBuilderMixin, ToolLoopMixin, MemoryOpsMixin):
     # ============================================================
     # 阶段4: 结果生成（兜底）
     # ============================================================
-    def _step_answer(self, state: State, stream_callback: callable = None) -> None:
+    def _step_answer(self, state: State, stream_callback: Optional[Callable[[str], None]] = None) -> None:
         """直接用 LLM 生成回答（无工具调用或兜底），注入历史记忆"""
         # P1-5: 如果 _step_tool_loop 已经生成了 final_answer，跳过本步骤避免覆盖
         if state.final_answer:

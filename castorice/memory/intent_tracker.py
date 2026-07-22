@@ -134,16 +134,30 @@ class IntentTracker:
         self.max_intents_per_session = max_intents_per_session
         self.intent_expiry_days = intent_expiry_days
         self._lock = threading.Lock()
+        self._local = threading.local()
         self._init_db()
 
     def _get_conn(self):
+        """thread-local SQLite 连接（复用，避免频繁创建/关闭）"""
         import sqlite3
         import os
-        os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
-        conn = sqlite3.connect(self.db_path, timeout=30.0)
-        conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute("PRAGMA synchronous=NORMAL;")
-        return conn
+        if not hasattr(self._local, "conn"):
+            os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
+            conn = sqlite3.connect(self.db_path, timeout=30.0, check_same_thread=False)
+            conn.execute("PRAGMA journal_mode=WAL;")
+            conn.execute("PRAGMA synchronous=NORMAL;")
+            self._local.conn = conn
+        return self._local.conn
+
+    def close(self) -> None:
+        """关闭当前线程的连接"""
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            self._local.conn = None
 
     def _init_db(self):
         conn = self._get_conn()
@@ -172,7 +186,6 @@ class IntentTracker:
             ON intents(session_ids)
         """)
         conn.commit()
-        conn.close()
 
     def add_intent(
         self,
@@ -208,7 +221,6 @@ class IntentTracker:
                 intent.updated_at,
             ))
             conn.commit()
-            conn.close()
             logger.info(f"新增意图: {intent.intent_id} | {root_intent[:50]}")
             return intent
 
@@ -229,8 +241,7 @@ class IntentTracker:
             cursor.execute("SELECT * FROM intents WHERE intent_id = ?", (intent_id,))
             row = cursor.fetchone()
             if not row:
-                conn.close()
-                return None
+                        return None
 
             intent = IntentNode.from_dict({
                 "intent_id": row[0],
@@ -280,7 +291,6 @@ class IntentTracker:
                 intent.intent_id,
             ))
             conn.commit()
-            conn.close()
             return intent
 
     def get_active_intents(self, limit: int = 10) -> List[IntentNode]:
@@ -293,7 +303,6 @@ class IntentTracker:
                 (limit,),
             )
             rows = cursor.fetchall()
-            conn.close()
             return [self._row_to_intent(row) for row in rows]
 
     def get_intents_by_session(self, session_id: str, limit: int = 10) -> List[IntentNode]:
@@ -310,7 +319,6 @@ class IntentTracker:
                 (session_id, limit),
             )
             rows = cursor.fetchall()
-            conn.close()
             return [self._row_to_intent(row) for row in rows]
 
     def get_expired_intents(self) -> List[IntentNode]:
@@ -324,7 +332,6 @@ class IntentTracker:
                 (cutoff,),
             )
             rows = cursor.fetchall()
-            conn.close()
             return [self._row_to_intent(row) for row in rows]
 
     def cleanup_expired(self) -> int:
@@ -339,7 +346,6 @@ class IntentTracker:
             )
             deleted = cursor.rowcount
             conn.commit()
-            conn.close()
             if deleted > 0:
                 logger.info(f"清理了 {deleted} 个过期意图")
             return deleted
@@ -351,7 +357,6 @@ class IntentTracker:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM intents WHERE intent_id = ?", (intent_id,))
             row = cursor.fetchone()
-            conn.close()
             return self._row_to_intent(row) if row else None
 
     def delete_intent(self, intent_id: str) -> bool:
@@ -362,7 +367,6 @@ class IntentTracker:
             cursor.execute("DELETE FROM intents WHERE intent_id = ?", (intent_id,))
             deleted = cursor.rowcount > 0
             conn.commit()
-            conn.close()
             return deleted
 
     def _row_to_intent(self, row) -> IntentNode:
@@ -602,8 +606,7 @@ class IntentTracker:
                     intent.intent_id,
                 ))
                 conn.commit()
-                conn.close()
-
+        
             logger.info(f"意图分解完成: {intent.intent_id} -> {len(tasks)}个子任务")
             return intent
 

@@ -597,7 +597,7 @@ class MemoryOpsMixin:
                 user_id = getattr(state, 'user_id', state.session_id)
                 relation = self.social_relation.get_relation(user_id)
                 if relation:
-                    relation_info = f"亲密度={relation.intimacy:.2f}, 信任度={relation.trust:.2f}"
+                    relation_info = f"亲密度={relation.intimacy:.2f}, 信任度={relation.trust_level:.2f}"
             except Exception:
                 pass
 

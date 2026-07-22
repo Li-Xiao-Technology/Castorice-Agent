@@ -423,16 +423,24 @@ class ActionQueue:
         self.db_path = db_path
         self.max_actions = max_actions
         self._lock = threading.Lock()
+        self._local = threading.local()
         self._init_db()
 
     def _get_conn(self):
-        import sqlite3
-        import os
-        os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
-        conn = sqlite3.connect(self.db_path, timeout=30.0)
-        conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute("PRAGMA synchronous=NORMAL;")
-        return conn
+        if not hasattr(self._local, "conn"):
+            import sqlite3
+            import os
+            os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
+            conn = sqlite3.connect(self.db_path, timeout=30.0, check_same_thread=False)
+            conn.execute("PRAGMA journal_mode=WAL;")
+            conn.execute("PRAGMA synchronous=NORMAL;")
+            self._local.conn = conn
+        return self._local.conn
+
+    def close(self):
+        if hasattr(self._local, "conn"):
+            self._local.conn.close()
+            delattr(self._local, "conn")
 
     def _init_db(self):
         conn = self._get_conn()
@@ -454,7 +462,6 @@ class ActionQueue:
             ON actions(status, priority DESC, created_at)
         """)
         conn.commit()
-        conn.close()
 
     def add_action(
         self,
@@ -486,7 +493,6 @@ class ActionQueue:
                 action.created_at,
             ))
             conn.commit()
-            conn.close()
             logger.info(f"新增行动: {action.action_id} | {description[:50]}")
         # P2: 避免锁嵌套死锁——cleanup 在锁外执行
         self._cleanup_excess()
@@ -524,7 +530,6 @@ class ActionQueue:
                 (limit,),
             )
             rows = cursor.fetchall()
-            conn.close()
             return [self._row_to_action(row) for row in rows]
 
     def get_highest_priority(self) -> Optional[ActionItem]:
@@ -544,7 +549,6 @@ class ActionQueue:
             )
             updated = cursor.rowcount > 0
             conn.commit()
-            conn.close()
             if updated:
                 logger.info(f"行动已执行: {action_id}")
             return updated
@@ -561,7 +565,6 @@ class ActionQueue:
             )
             updated = cursor.rowcount > 0
             conn.commit()
-            conn.close()
             if updated:
                 logger.info(f"行动执行失败: {action_id} | {reason}")
             return updated
@@ -574,7 +577,6 @@ class ActionQueue:
             cursor.execute("DELETE FROM actions WHERE action_id = ?", (action_id,))
             deleted = cursor.rowcount > 0
             conn.commit()
-            conn.close()
             return deleted
 
     def _cleanup_excess(self):
@@ -592,7 +594,6 @@ class ActionQueue:
                 placeholders = ",".join("?" * len(ids))
                 cursor.execute(f"DELETE FROM actions WHERE action_id IN ({placeholders})", ids)
                 conn.commit()
-            conn.close()
 
     def _row_to_action(self, row) -> ActionItem:
         """SQL行转ActionItem"""
@@ -633,7 +634,6 @@ class ActionQueue:
             executed = cursor.fetchone()[0]
             cursor.execute("SELECT COUNT(*) FROM actions WHERE status = 'failed'")
             failed = cursor.fetchone()[0]
-            conn.close()
             return {
                 "pending": pending,
                 "executed": executed,

@@ -259,3 +259,15 @@ qq_bot:
   auto_reply: true                      # 是否自动回复
   allowed_groups: []                    # 允许的群列表（空表示全部允许）
   allowed_users: []                     # 允许的用户列表（空表示全部允许）
+
+# --------------- HTTP 服务器配置 ---------------
+http_server:
+  host: "127.0.0.1"
+  port: 5477
+  cors_origins:
+    - "http://localhost"
+    - "http://localhost:5173"
+    - "http://127.0.0.1"
+    - "file://"
+    - "null"
+  api_keys: []
