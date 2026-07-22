@@ -50,6 +50,8 @@ logs/
 backup_for_upload/
 backup/
 backups/
+backup_*/
+backup_*/**
 
 # Model cache
 .cache/

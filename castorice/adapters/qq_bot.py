@@ -638,7 +638,7 @@ class QQBotAdapter:
             logger.info(f"收到 Hello 包: op={hello_data.get('op')}, 数据: {json.dumps(hello_data, ensure_ascii=False)[:200]}")
 
             if hello_data.get("op") == 10:
-                self._heartbeat_interval = hello_data.get("d", {}).get("heartbeat_interval", 30000) / 1000
+                self._heartbeat_interval = (hello_data.get("d") or {}).get("heartbeat_interval", 30000) / 1000
                 logger.info(f"心跳间隔: {self._heartbeat_interval} 秒")
 
             # 判断是 RESUME 恢复会话还是全新鉴权

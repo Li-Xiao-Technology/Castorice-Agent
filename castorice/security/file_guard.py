@@ -19,7 +19,7 @@ import re
 import threading
 import time
 from datetime import datetime, timezone
-from typing import Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("Castorice.Security.FileGuard")
 
@@ -83,10 +83,14 @@ class FileWriteGuard:
 
     def __init__(self):
         self._lock = threading.RLock()
-        self._audit_log: list = []
+        self._audit_log: List[Dict[str, Any]] = []
         self._max_audit = 500
-        self._consecutive_writes = 0           # 速率限制
+        # 写入速率限制
+        self._consecutive_writes = 0
         self._last_write_ts = 0.0
+        # 命令执行速率限制（独立计数，避免互相影响）
+        self._consecutive_cmds = 0
+        self._last_cmd_ts = 0.0
         self._rate_limit_window = 60           # 60 秒
         self._rate_limit_max = 20              # 60 秒内最多 20 次
 
@@ -165,14 +169,15 @@ class FileWriteGuard:
                     self._record_audit("cmd_blocked", "<terminal>", f"危险命令: {cmd[:200]}")
                     return False, f"危险命令已被拦截: {pattern.pattern}"
 
-            # 2. 速率限制
+            # 2. 命令执行速率限制（使用独立计数器，避免与文件写入互相影响）
             now = time.time()
-            if now - self._last_write_ts > self._rate_limit_window:
-                self._consecutive_writes = 0
-            if self._consecutive_writes >= self._rate_limit_max:
+            if now - self._last_cmd_ts > self._rate_limit_window:
+                self._consecutive_cmds = 0
+            if self._consecutive_cmds >= self._rate_limit_max:
+                self._record_audit("cmd_rate_limited", "<terminal>", "")
                 return False, f"命令执行频率超限"
-            self._consecutive_writes += 1
-            self._last_write_ts = now
+            self._consecutive_cmds += 1
+            self._last_cmd_ts = now
 
             self._record_audit("cmd_allowed", "<terminal>", f"cmd={cmd[:200]}")
             return True, ""

@@ -221,6 +221,7 @@ class TestActionQueue:
             assert item is not None
             assert item.description == "测试行动"
             assert item.priority == pytest.approx(0.9)
+            queue.close()
 
     def test_mark_executed(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -234,6 +235,7 @@ class TestActionQueue:
             next_item = queue.get_highest_priority()
             assert next_item is not None
             assert next_item.description == "行动B"
+            queue.close()
 
     def test_to_prompt(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -244,6 +246,7 @@ class TestActionQueue:
             prompt = queue.to_prompt(max_actions=3)
             assert "行动1" in prompt
             assert "行动2" in prompt
+            queue.close()
 
     def test_add_from_reflection(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -257,6 +260,7 @@ class TestActionQueue:
             assert added == 2
             item = queue.get_highest_priority()
             assert item.description == "行动A"
+            queue.close()
 
     def test_get_highest_priority_empty(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -264,6 +268,7 @@ class TestActionQueue:
             queue = ActionQueue(db_path=path)
             item = queue.get_highest_priority()
             assert item is None
+            queue.close()
 
     def test_action_item_to_dict(self):
         item = ActionItem(action_id="test1", description="desc", priority=0.7)

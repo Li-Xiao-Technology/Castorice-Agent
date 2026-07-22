@@ -81,11 +81,21 @@ class PluginManager:
             _sandboxed_os = _SandboxedOS()
             module.__dict__['os'] = _sandboxed_os
 
+            # 同时拦截 from os import xxx 的 sys.modules 缓存路径
+            _original_os = sys.modules.get('os')
+            sys.modules['os'] = _sandboxed_os
+
             try:
                 spec.loader.exec_module(module)
                 sys.modules[module_name] = module
             except Exception:
                 raise
+            finally:
+                # 恢复 sys.modules，避免污染全局
+                if _original_os is not None:
+                    sys.modules['os'] = _original_os
+                elif 'os' in sys.modules:
+                    del sys.modules['os']
 
             plugin_info = getattr(module, "__plugin_info__", None)
             if plugin_info and isinstance(plugin_info, dict):

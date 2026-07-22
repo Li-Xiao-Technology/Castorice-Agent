@@ -4,6 +4,7 @@ version = "2.5.0"
 description = "自进化智能体 - 复刻 Hermes Agent 架构，自研主循环"
 authors = [{ name = "Castorice Team" }]
 readme = "README.md"
+license = {text = "MIT"}
 requires-python = ">=3.10"
 
 # ========== 精简后的核心依赖 ==========

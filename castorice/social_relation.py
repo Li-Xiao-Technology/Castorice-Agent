@@ -125,15 +125,23 @@ class SocialRelationManager:
         self.db_path = db_path
         self.max_key_memories = max_key_memories
         self._lock = threading.Lock()
+        self._local = threading.local()
         self._init_db()
 
     def _get_conn(self):
         import os
-        os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
-        conn = sqlite3.connect(self.db_path, timeout=30.0)
-        conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute("PRAGMA synchronous=NORMAL;")
-        return conn
+        if not hasattr(self._local, "conn"):
+            os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
+            conn = sqlite3.connect(self.db_path, timeout=30.0, check_same_thread=False)
+            conn.execute("PRAGMA journal_mode=WAL;")
+            conn.execute("PRAGMA synchronous=NORMAL;")
+            self._local.conn = conn
+        return self._local.conn
+
+    def close(self):
+        if hasattr(self._local, "conn"):
+            self._local.conn.close()
+            delattr(self._local, "conn")
 
     def _init_db(self):
         conn = self._get_conn()
@@ -165,7 +173,6 @@ class SocialRelationManager:
             ON relations(last_interaction)
         """)
         conn.commit()
-        conn.close()
 
     def get_relation(self, user_id: str) -> Optional[RelationNode]:
         """获取用户关系档案"""
@@ -174,7 +181,6 @@ class SocialRelationManager:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM relations WHERE user_id = ?", (user_id,))
             row = cursor.fetchone()
-            conn.close()
             return self._row_to_relation(row) if row else None
 
     def get_or_create_relation(self, user_id: str, user_name: str = "") -> RelationNode:
@@ -214,7 +220,6 @@ class SocialRelationManager:
                 relation.updated_at,
             ))
             conn.commit()
-            conn.close()
             return relation
 
     def update_relation(
@@ -243,7 +248,6 @@ class SocialRelationManager:
             cursor.execute("SELECT * FROM relations WHERE user_id = ?", (user_id,))
             row = cursor.fetchone()
             if not row:
-                conn.close()
                 return None
 
             relation = self._row_to_relation(row)
@@ -355,7 +359,6 @@ class SocialRelationManager:
                 relation.user_id,
             ))
             conn.commit()
-            conn.close()
             return relation
 
     def _add_key_memory(self, relation: RelationNode, memory: str):
@@ -372,7 +375,6 @@ class SocialRelationManager:
             cursor.execute("SELECT preferences FROM relations WHERE user_id = ?", (user_id,))
             row = cursor.fetchone()
             if not row:
-                conn.close()
                 return
 
             prefs = json.loads(row[0] or "{}")
@@ -382,7 +384,6 @@ class SocialRelationManager:
                 (json.dumps(prefs), datetime.now(timezone.utc).isoformat(), user_id),
             )
             conn.commit()
-            conn.close()
 
     def to_prompt(self, user_id: str) -> str:
         """
@@ -434,7 +435,6 @@ class SocialRelationManager:
                 (limit,),
             )
             rows = cursor.fetchall()
-            conn.close()
             return [self._row_to_relation(row) for row in rows]
 
     def _row_to_relation(self, row) -> RelationNode:
@@ -470,5 +470,4 @@ class SocialRelationManager:
                 stats[rtype] = cursor.fetchone()[0]
             cursor.execute("SELECT COUNT(*) FROM relations")
             stats["total"] = cursor.fetchone()[0]
-            conn.close()
             return stats

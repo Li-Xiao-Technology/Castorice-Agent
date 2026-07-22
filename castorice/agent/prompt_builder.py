@@ -53,7 +53,7 @@ class PromptBuilderMixin:
 
         # 注入当前时间（关键：确保 Agent 知道当前日期）
         from datetime import datetime, timezone
-        now_local = datetime.now()
+        now_local = datetime.now().astimezone()
         now_utc = datetime.now(timezone.utc)
         week_days = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
         parts.append(

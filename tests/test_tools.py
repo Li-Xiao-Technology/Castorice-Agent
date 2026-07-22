@@ -75,7 +75,7 @@ class TestPythonReplSandbox:
 
     def test_import_os_blocked(self):
         result = self.repl.invoke({"code": "import os"})
-        assert "ImportError" in result or "error" in result.lower()
+        assert "ImportError" in result or "error" in result.lower() or "安全拦截" in result
 
     def test_import_subprocess_blocked(self):
         result = self.repl.invoke({"code": "import subprocess"})

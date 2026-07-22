@@ -131,16 +131,28 @@ class AutobiographicalMemory:
         self.max_milestones = max_milestones
         self.max_events = max_events
         self._lock = threading.Lock()
+        self._local = threading.local()
         self._total_interactions: int = 0
         self._init_db()
         self._load_stats()
 
     def _get_conn(self):
-        os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
-        conn = sqlite3.connect(self.db_path, timeout=30.0)
-        conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute("PRAGMA synchronous=NORMAL;")
-        return conn
+        if not hasattr(self._local, "conn"):
+            os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
+            conn = sqlite3.connect(self.db_path, timeout=30.0, check_same_thread=False)
+            conn.execute("PRAGMA journal_mode=WAL;")
+            conn.execute("PRAGMA synchronous=NORMAL;")
+            self._local.conn = conn
+        return self._local.conn
+
+    def close(self) -> None:
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            self._local.conn = None
 
     def _init_db(self):
         conn = self._get_conn()
@@ -219,7 +231,6 @@ class AutobiographicalMemory:
             )
 
         conn.commit()
-        conn.close()
 
     def _load_stats(self):
         with self._lock:
@@ -232,7 +243,6 @@ class AutobiographicalMemory:
                     self._total_interactions = int(row[0])
                 except ValueError:
                     self._total_interactions = 0
-            conn.close()
 
     def _save_stats(self, conn):
         cursor = conn.cursor()
@@ -248,7 +258,6 @@ class AutobiographicalMemory:
             conn = self._get_conn()
             self._save_stats(conn)
             conn.commit()
-            conn.close()
 
     def add_milestone(
         self,
@@ -286,7 +295,6 @@ class AutobiographicalMemory:
                 milestone.created_at,
             ))
             conn.commit()
-            conn.close()
             logger.info(f"里程碑记录: {title}")
             return milestone
 
@@ -331,7 +339,6 @@ class AutobiographicalMemory:
                 event.created_at,
             ))
             conn.commit()
-            conn.close()
             return event
 
     def get_milestones(self, limit: int = 20, category: Optional[str] = None) -> List[LifeMilestone]:
@@ -350,7 +357,6 @@ class AutobiographicalMemory:
                     (limit,),
                 )
             rows = cursor.fetchall()
-            conn.close()
             return [self._row_to_milestone(row) for row in rows]
 
     def get_current_epoch(self) -> Optional[LifeEpoch]:
@@ -362,7 +368,6 @@ class AutobiographicalMemory:
                 "SELECT * FROM epochs WHERE end_time IS NULL OR end_time = '' ORDER BY start_time DESC LIMIT 1"
             )
             row = cursor.fetchone()
-            conn.close()
             return self._row_to_epoch(row) if row else None
 
     def start_epoch(self, name: str, description: str = "") -> LifeEpoch:
@@ -399,7 +404,6 @@ class AutobiographicalMemory:
                 epoch.created_at,
             ))
             conn.commit()
-            conn.close()
             logger.info(f"新时期开始: {name}")
             return epoch
 
@@ -505,7 +509,6 @@ class AutobiographicalMemory:
                         epoch.epoch_id,
                     ))
                     conn.commit()
-                    conn.close()
 
                 logger.info(f"A1 LLM时期总结完成: {epoch.name}")
         except Exception as e:
@@ -581,7 +584,6 @@ class AutobiographicalMemory:
             params.append(limit)
             cursor.execute(query, params)
             rows = cursor.fetchall()
-            conn.close()
             return [self._row_to_event(row) for row in rows]
 
     def _row_to_milestone(self, row) -> LifeMilestone:
@@ -636,5 +638,4 @@ class AutobiographicalMemory:
             stats["event_count"] = cursor.fetchone()[0]
             cursor.execute("SELECT COUNT(*) FROM epochs")
             stats["epoch_count"] = cursor.fetchone()[0]
-            conn.close()
             return stats

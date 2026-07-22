@@ -168,6 +168,43 @@ class SelfConcept:
 
         return True, ""
 
+    def revert(self) -> bool:
+        """
+        回滚到最近的备份版本（用于自动回滚机制）
+
+        :return: 是否回滚成功
+        """
+        with self._lock:
+            backup_dir = self.storage_path + ".backups"
+            if not os.path.exists(backup_dir):
+                logger.info("自我概念无备份可回滚")
+                return False
+
+            backups = sorted(
+                [os.path.join(backup_dir, f) for f in os.listdir(backup_dir) if f.endswith(".md")],
+                key=os.path.getmtime,
+                reverse=True,
+            )
+            if not backups:
+                logger.info("自我概念无备份文件可回滚")
+                return False
+
+            latest_backup = backups[0]
+            try:
+                with open(latest_backup, "r", encoding="utf-8") as f:
+                    backup_content = f.read()
+                tmp_path = self.storage_path + ".tmp"
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    f.write(backup_content)
+                os.replace(tmp_path, self.storage_path)
+                self._cache = backup_content
+                self._cache_loaded = True
+                logger.info(f"自我概念已回滚到备份: {latest_backup}")
+                return True
+            except Exception as e:
+                logger.warning(f"自我概念回滚失败: {e}")
+                return False
+
     def update(self, new_content: str, reason: str = "") -> bool:
         """
         Agent 自己更新自我概念
