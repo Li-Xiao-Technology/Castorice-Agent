@@ -19,12 +19,13 @@ stranger → acquaintance → friend → close_friend → trusted
 
 import json
 import logging
-import os
 import sqlite3
 import threading
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
+
+from castorice.storage import SqliteStorage
 
 logger = logging.getLogger("Castorice.SocialRelation")
 
@@ -44,6 +45,19 @@ class RelationNode:
     key_memories: List[str] = field(default_factory=list)  # 关键共同记忆
     preferences: Dict[str, Any] = field(default_factory=dict)  # 用户偏好（从交互中学习）
     interaction_streak: int = 0             # 连续互动天数
+    
+    # 第二阶段新增：镜中自我（用户眼中的我）
+    mirror_self: Dict[str, Any] = field(default_factory=lambda: {
+        "perceived_personality": [],      # 用户认为我的性格特征
+        "perceived_abilities": [],         # 用户认为我的能力
+        "perceived_emotions": [],          # 用户认为我的情绪状态
+        "positive_feedback_count": 0,      # 正面反馈次数
+        "negative_feedback_count": 0,      # 负面反馈次数
+        "neutral_feedback_count": 0,       # 中性反馈次数
+        "last_feedback_time": "",          # 最后反馈时间
+        "feedback_history": [],             # 最近10条反馈记录
+    })
+    
     created_at: str = ""
     updated_at: str = ""
 
@@ -103,7 +117,7 @@ class RelationNode:
         return styles.get(self.relation_type, "礼貌、正式")
 
 
-class SocialRelationManager:
+class SocialRelationManager(SqliteStorage):
     """
     社会关系管理器
 
@@ -122,26 +136,10 @@ class SocialRelationManager:
         db_path: str = "./castorice_data/social_relations.db",
         max_key_memories: int = 20,
     ):
-        self.db_path = db_path
+        super().__init__(db_path)
         self.max_key_memories = max_key_memories
-        self._lock = threading.Lock()
-        self._local = threading.local()
+        self._lock = threading.RLock()
         self._init_db()
-
-    def _get_conn(self):
-        import os
-        if not hasattr(self._local, "conn"):
-            os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
-            conn = sqlite3.connect(self.db_path, timeout=30.0, check_same_thread=False)
-            conn.execute("PRAGMA journal_mode=WAL;")
-            conn.execute("PRAGMA synchronous=NORMAL;")
-            self._local.conn = conn
-        return self._local.conn
-
-    def close(self):
-        if hasattr(self._local, "conn"):
-            self._local.conn.close()
-            delattr(self._local, "conn")
 
     def _init_db(self):
         conn = self._get_conn()
@@ -160,6 +158,7 @@ class SocialRelationManager:
                 key_memories TEXT,
                 preferences TEXT,
                 interaction_streak INTEGER DEFAULT 0,
+                mirror_self TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
@@ -178,6 +177,7 @@ class SocialRelationManager:
         """获取用户关系档案"""
         with self._lock:
             conn = self._get_conn()
+            conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM relations WHERE user_id = ?", (user_id,))
             row = cursor.fetchone()
@@ -201,8 +201,8 @@ class SocialRelationManager:
                 INSERT INTO relations
                 (user_id, user_name, relation_type, intimacy, trust_level, emotional_bond,
                  shared_history_count, last_interaction, first_met, key_memories,
-                 preferences, interaction_streak, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 preferences, interaction_streak, mirror_self, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 relation.user_id,
                 relation.user_name,
@@ -216,6 +216,7 @@ class SocialRelationManager:
                 json.dumps(relation.key_memories),
                 json.dumps(relation.preferences),
                 relation.interaction_streak,
+                json.dumps(relation.mirror_self),
                 relation.created_at,
                 relation.updated_at,
             ))
@@ -244,6 +245,7 @@ class SocialRelationManager:
         """
         with self._lock:
             conn = self._get_conn()
+            conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM relations WHERE user_id = ?", (user_id,))
             row = cursor.fetchone()
@@ -262,7 +264,7 @@ class SocialRelationManager:
 
             # 更新连续互动天数
             try:
-                last_ts = datetime.fromisoformat(row[7])
+                last_ts = datetime.fromisoformat(row["last_interaction"])
                 if now.date() != last_ts.date():
                     if (now.date() - last_ts.date()).days == 1:
                         relation.interaction_streak += 1
@@ -342,7 +344,8 @@ class SocialRelationManager:
                 UPDATE relations SET
                 user_name = ?, relation_type = ?, intimacy = ?, trust_level = ?,
                 emotional_bond = ?, shared_history_count = ?, last_interaction = ?,
-                key_memories = ?, preferences = ?, interaction_streak = ?, updated_at = ?
+                key_memories = ?, preferences = ?, interaction_streak = ?, 
+                mirror_self = ?, updated_at = ?
                 WHERE user_id = ?
             """, (
                 relation.user_name,
@@ -355,6 +358,7 @@ class SocialRelationManager:
                 json.dumps(relation.key_memories),
                 json.dumps(relation.preferences),
                 relation.interaction_streak,
+                json.dumps(relation.mirror_self),
                 relation.updated_at,
                 relation.user_id,
             ))
@@ -371,13 +375,14 @@ class SocialRelationManager:
         """记录用户偏好（从交互中学习）"""
         with self._lock:
             conn = self._get_conn()
+            conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute("SELECT preferences FROM relations WHERE user_id = ?", (user_id,))
             row = cursor.fetchone()
             if not row:
                 return
 
-            prefs = json.loads(row[0] or "{}")
+            prefs = json.loads(row["preferences"] or "{}")
             prefs[key] = value
             cursor.execute(
                 "UPDATE relations SET preferences = ?, updated_at = ? WHERE user_id = ?",
@@ -429,6 +434,7 @@ class SocialRelationManager:
         """获取所有关系（按最后互动时间排序）"""
         with self._lock:
             conn = self._get_conn()
+            conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT * FROM relations ORDER BY last_interaction DESC LIMIT ?",
@@ -438,22 +444,27 @@ class SocialRelationManager:
             return [self._row_to_relation(row) for row in rows]
 
     def _row_to_relation(self, row) -> RelationNode:
-        """SQL行转RelationNode"""
+        """SQL行转RelationNode
+
+        使用 sqlite3.Row 按列名访问（调用方需设置 conn.row_factory = sqlite3.Row），
+        避免硬编码索引在 schema 变更时出错。
+        """
         return RelationNode(
-            user_id=row[0],
-            user_name=row[1] or "",
-            relation_type=row[2],
-            intimacy=row[3],
-            trust_level=row[4],
-            emotional_bond=row[5],
-            shared_history_count=row[6],
-            last_interaction=row[7],
-            first_met=row[8],
-            key_memories=json.loads(row[9] or "[]"),
-            preferences=json.loads(row[10] or "{}"),
-            interaction_streak=row[11],
-            created_at=row[12],
-            updated_at=row[13],
+            user_id=row["user_id"],
+            user_name=row["user_name"] or "",
+            relation_type=row["relation_type"],
+            intimacy=row["intimacy"],
+            trust_level=row["trust_level"],
+            emotional_bond=row["emotional_bond"],
+            shared_history_count=row["shared_history_count"],
+            last_interaction=row["last_interaction"],
+            first_met=row["first_met"],
+            key_memories=json.loads(row["key_memories"] or "[]"),
+            preferences=json.loads(row["preferences"] or "{}"),
+            interaction_streak=row["interaction_streak"],
+            mirror_self=json.loads(row["mirror_self"] or '{"perceived_personality": [], "perceived_abilities": [], "perceived_emotions": [], "positive_feedback_count": 0, "negative_feedback_count": 0, "neutral_feedback_count": 0, "last_feedback_time": "", "feedback_history": []}'),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
         )
 
     def get_stats(self) -> Dict[str, Any]:
@@ -471,3 +482,284 @@ class SocialRelationManager:
             cursor.execute("SELECT COUNT(*) FROM relations")
             stats["total"] = cursor.fetchone()[0]
             return stats
+
+    # ============================================================
+    # 镜中自我（第二阶段新增）
+    # ============================================================
+
+    def record_user_feedback(self, user_id: str, feedback: str, feedback_type: str = "neutral") -> None:
+        """
+        记录用户反馈，更新镜中自我
+        
+        镜中自我理论（Cooley, 1902）：我们通过他人对我们的看法来认识自己。
+        
+        Args:
+            user_id: 用户ID
+            feedback: 用户反馈内容
+            feedback_type: 反馈类型（positive/negative/neutral）
+        """
+        with self._lock:
+            relation = self.get_or_create_relation(user_id)
+            mirror = relation.mirror_self
+            
+            # 更新反馈计数
+            if feedback_type == "positive":
+                mirror["positive_feedback_count"] += 1
+            elif feedback_type == "negative":
+                mirror["negative_feedback_count"] += 1
+            else:
+                mirror["neutral_feedback_count"] += 1
+            
+            # 记录反馈历史（保留最近10条）
+            mirror["feedback_history"].append({
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "feedback": feedback[:100],
+                "type": feedback_type,
+            })
+            if len(mirror["feedback_history"]) > 10:
+                mirror["feedback_history"] = mirror["feedback_history"][-10:]
+            
+            mirror["last_feedback_time"] = datetime.now(timezone.utc).isoformat()
+            
+            # 保存到数据库
+            conn = self._get_conn()
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE relations SET mirror_self = ?, updated_at = ? WHERE user_id = ?",
+                (json.dumps(mirror), datetime.now(timezone.utc).isoformat(), user_id),
+            )
+            conn.commit()
+
+    def analyze_mirror_self(self, user_id: str, llm_adapter=None) -> Dict[str, Any]:
+        """
+        分析镜中自我——从用户反馈中归纳"用户眼中的我"
+        
+        Args:
+            user_id: 用户ID
+            llm_adapter: LLM 适配器（用于深度分析）
+        
+        Returns:
+            镜中自我分析结果
+        """
+        relation = self.get_relation(user_id)
+        if not relation:
+            return {"error": "用户关系不存在"}
+        
+        mirror = relation.mirror_self
+        feedback_history = mirror.get("feedback_history", [])
+        
+        if not feedback_history:
+            return {
+                "perceived_personality": [],
+                "perceived_abilities": [],
+                "perceived_emotions": [],
+                "feedback_summary": "暂无用户反馈",
+                "has_sufficient_data": False,
+            }
+        
+        # 简单统计分析（不依赖LLM）
+        positive_count = mirror.get("positive_feedback_count", 0)
+        negative_count = mirror.get("negative_feedback_count", 0)
+        total_count = positive_count + negative_count + mirror.get("neutral_feedback_count", 0)
+        
+        result = {
+            "perceived_personality": [],
+            "perceived_abilities": [],
+            "perceived_emotions": [],
+            "feedback_summary": f"共 {total_count} 条反馈（正面 {positive_count}，负面 {negative_count}）",
+            "has_sufficient_data": total_count >= 3,
+        }
+        
+        # 如果有足够数据且有LLM，进行深度分析
+        if total_count >= 3 and llm_adapter:
+            feedback_text = "\n".join([
+                f"- [{f['type']}] {f['feedback']}"
+                for f in feedback_history
+            ])
+            
+            prompt = f"""请分析以下用户对我的反馈，归纳"用户眼中的我"是什么样的。
+
+【用户反馈历史】
+{feedback_text}
+
+请以 JSON 格式返回（只返回 JSON）：
+{{
+  "perceived_personality": ["性格特征1", "性格特征2"],
+  "perceived_abilities": ["能力1", "能力2"],
+  "perceived_emotions": ["用户认为我的情绪状态1", "用户认为我的情绪状态2"],
+  "feedback_summary": "一句话总结用户对我的整体印象"
+}}
+
+注意：仅基于反馈内容，不要编造。如果某方面没有信息，返回空数组。"""
+            
+            try:
+                from castorice.model_adapter import ChatMessage
+                response = llm_adapter.chat([
+                    ChatMessage(role="system", content="你是一个社会心理学分析系统。只输出 JSON。"),
+                    ChatMessage(role="user", content=prompt),
+                ])
+                raw = response.content if hasattr(response, "content") else str(response)
+                
+                import re
+                try:
+                    parsed = json.loads(raw)
+                except json.JSONDecodeError:
+                    m = re.search(r"\{[\s\S]+\}", raw)
+                    parsed = json.loads(m.group(0)) if m else {}
+                
+                result.update({
+                    "perceived_personality": parsed.get("perceived_personality", []),
+                    "perceived_abilities": parsed.get("perceived_abilities", []),
+                    "perceived_emotions": parsed.get("perceived_emotions", []),
+                    "feedback_summary": parsed.get("feedback_summary", result["feedback_summary"]),
+                })
+                
+                # 更新关系节点中的镜中自我
+                mirror["perceived_personality"] = result["perceived_personality"]
+                mirror["perceived_abilities"] = result["perceived_abilities"]
+                mirror["perceived_emotions"] = result["perceived_emotions"]
+                
+                conn = self._get_conn()
+                cursor = conn.cursor()
+                cursor.execute(
+                    "UPDATE relations SET mirror_self = ?, updated_at = ? WHERE user_id = ?",
+                    (json.dumps(mirror), datetime.now(timezone.utc).isoformat(), user_id),
+                )
+                conn.commit()
+                
+            except Exception as e:
+                logger.debug(f"镜中自我分析失败: {e}")
+        
+        return result
+
+    def get_mirror_self_description(self, user_id: str, llm_adapter=None) -> str:
+        """
+        获取镜中自我的自然语言描述
+        
+        Returns:
+            镜中自我描述（如："用户认为我是一个耐心、乐于助人的助手"）
+        """
+        analysis = self.analyze_mirror_self(user_id, llm_adapter)
+        
+        if not analysis.get("has_sufficient_data", False):
+            return "我还需要更多交互来了解用户眼中的我"
+        
+        parts = []
+        if analysis.get("perceived_personality"):
+            parts.append(f"用户认为我的性格：{', '.join(analysis['perceived_personality'])}")
+        if analysis.get("perceived_abilities"):
+            parts.append(f"用户认为我的能力：{', '.join(analysis['perceived_abilities'])}")
+        if analysis.get("perceived_emotions"):
+            parts.append(f"用户认为我的情绪：{', '.join(analysis['perceived_emotions'])}")
+        if analysis.get("feedback_summary"):
+            parts.append(f"总结：{analysis['feedback_summary']}")
+        
+        return "\n".join(parts)
+
+    def compare_self_concept_with_mirror(self, user_id: str, self_concept_text: str, llm_adapter=None) -> Dict[str, Any]:
+        """
+        对比自我概念与镜中自我，检测认知失调
+        
+        当自我概念与镜中自我差异较大时，触发认知失调，应触发反思。
+        
+        Args:
+            user_id: 用户ID
+            self_concept_text: 当前自我概念文本
+            llm_adapter: LLM 适配器（用于深度分析）
+        
+        Returns:
+            {
+                "match": 是否一致,
+                "similarity": 相似度 0-1,
+                "differences": ["差异1", "差异2"],
+                "should_reflect": 是否应该触发反思,
+            }
+        """
+        mirror_analysis = self.analyze_mirror_self(user_id, llm_adapter)
+        
+        if not mirror_analysis.get("has_sufficient_data", False):
+            return {
+                "match": True,
+                "similarity": 0.5,
+                "differences": [],
+                "should_reflect": False,
+                "reason": "镜中自我数据不足",
+            }
+        
+        if not self_concept_text:
+            return {
+                "match": False,
+                "similarity": 0.0,
+                "differences": ["缺少自我概念"],
+                "should_reflect": True,
+                "reason": "没有自我概念可以对比",
+            }
+        
+        if llm_adapter:
+            # 用LLM对比
+            mirror_desc = self.get_mirror_self_description(user_id, llm_adapter)
+            
+            prompt = f"""请对比以下两个描述，分析它们是否一致。
+
+【自我概念】
+{self_concept_text[:500]}
+
+【镜中自我（用户眼中的我）】
+{mirror_desc}
+
+请以 JSON 格式返回（只返回 JSON）：
+{{
+  "match": true/false,
+  "similarity": 0.5,
+  "differences": ["差异点1", "差异点2"],
+  "should_reflect": true/false
+}}
+
+说明：
+- match: 是否基本一致
+- similarity: 相似度 0-1
+- differences: 具体差异点
+- should_reflect: 差异是否大到需要触发反思（差异>3个或相似度<0.5）"""
+            
+            try:
+                from castorice.model_adapter import ChatMessage
+                response = llm_adapter.chat([
+                    ChatMessage(role="system", content="你是一个自我认知分析系统。只输出 JSON。"),
+                    ChatMessage(role="user", content=prompt),
+                ])
+                raw = response.content if hasattr(response, "content") else str(response)
+                
+                import re
+                try:
+                    parsed = json.loads(raw)
+                except json.JSONDecodeError:
+                    m = re.search(r"\{[\s\S]+\}", raw)
+                    parsed = json.loads(m.group(0)) if m else {}
+                
+                return {
+                    "match": parsed.get("match", False),
+                    "similarity": parsed.get("similarity", 0.5),
+                    "differences": parsed.get("differences", []),
+                    "should_reflect": parsed.get("should_reflect", False),
+                    "reason": "镜中自我与自我概念对比分析",
+                }
+            except Exception as e:
+                logger.debug(f"自我概念对比失败: {e}")
+        
+        # 简单对比（基于关键词）
+        mirror_personality = mirror_analysis.get("perceived_personality", [])
+        differences = []
+        
+        for trait in mirror_personality:
+            if trait not in self_concept_text:
+                differences.append(f"镜中自我有'{trait}'，但自我概念中没有")
+        
+        similarity = 1.0 - len(differences) / max(1, len(mirror_personality))
+        
+        return {
+            "match": len(differences) == 0,
+            "similarity": similarity,
+            "differences": differences,
+            "should_reflect": len(differences) > 1 or similarity < 0.5,
+            "reason": "基于关键词的简单对比",
+        }

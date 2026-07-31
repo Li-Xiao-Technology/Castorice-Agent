@@ -11,14 +11,18 @@
 不修改任何代码/配置，纯只读分析。
 """
 
+import json
 import logging
 import re
 import threading
+import time
 from collections import deque
-from contextlib import nullcontext
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Deque, Dict, List, Optional, Tuple
+
+from castorice.storage import SqliteStorage
+from castorice.utils import chinese_tokenize, chinese_text_similarity
 
 logger = logging.getLogger("Castorice.Metacognition")
 
@@ -54,9 +58,10 @@ class AnswerQuality:
     clarity: float = 0.0
     issues: List[str] = field(default_factory=list)
     improvement_suggestions: List[str] = field(default_factory=list)
+    is_small_talk: bool = False
 
 
-class Metacognition:
+class Metacognition(SqliteStorage):
     """
     元认知模块 - 让 Agent 能反思自己的输出。
 
@@ -66,13 +71,101 @@ class Metacognition:
     - 为 Agent 提供决策参考
     """
 
-    def __init__(self):
+    def __init__(self, db_path: str = "./castorice_data/metacognition.db"):
+        super().__init__(db_path)
         # P2-9: 用 deque(maxlen=N) 替代 list + pop(0)，O(1) 淘汰旧元素
         self._recent_claims: Deque[Dict[str, Any]] = deque(maxlen=50)
         self._max_recent_claims = 50
         # P2.4: 线程锁 + 学习到的规则字典
         self._lock = threading.RLock()
         self._learned_rules: Dict[str, Dict[str, Any]] = {}
+        self._init_db()
+        self._load_from_db()
+
+    # ============================================================
+    # SQLite 持久化
+    # ============================================================
+
+    def _init_db(self) -> None:
+        """创建 SQLite 表（如不存在）"""
+        conn = self._get_conn()
+        try:
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS learned_rules (
+                    rule_id TEXT PRIMARY KEY,
+                    data_json TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS reasoning_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    data_json TEXT NOT NULL
+                );
+            """)
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"metacognition 数据库初始化失败: {e}")
+
+    def _load_from_db(self) -> None:
+        """从 SQLite 加载已学习规则和推理历史到内存"""
+        conn = self._get_conn()
+        # 加载 learned_rules
+        try:
+            rows = conn.execute("SELECT rule_id, data_json FROM learned_rules").fetchall()
+            for rule_id, data_json in rows:
+                self._learned_rules[rule_id] = json.loads(data_json)
+        except Exception as e:
+            logger.warning(f"加载 learned_rules 失败: {e}")
+
+        # 加载 reasoning_history（保留最近 50 条，与 deque maxlen 一致）
+        try:
+            rows = conn.execute(
+                "SELECT data_json FROM reasoning_history ORDER BY id DESC LIMIT 50"
+            ).fetchall()
+            for (data_json,) in reversed(rows):
+                self._recent_claims.append(json.loads(data_json))
+        except Exception as e:
+            logger.warning(f"加载 reasoning_history 失败: {e}")
+
+    def _save_rule_to_db(self, rule: Dict[str, Any]) -> None:
+        """将单条规则写入/更新到 SQLite"""
+        conn = self._get_conn()
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO learned_rules (rule_id, data_json) VALUES (?, ?)",
+                (rule["id"], json.dumps(rule, ensure_ascii=False)),
+            )
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"保存规则到数据库失败: {e}")
+
+    def _save_reasoning_to_db(self, entry: Dict[str, Any]) -> None:
+        """将单条推理历史写入 SQLite"""
+        conn = self._get_conn()
+        try:
+            conn.execute(
+                "INSERT INTO reasoning_history (data_json) VALUES (?)",
+                (json.dumps(entry, ensure_ascii=False),),
+            )
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"保存推理历史到数据库失败: {e}")
+
+    def _prune_reasoning_db(self) -> None:
+        """清理超出 maxlen 的旧推理历史"""
+        conn = self._get_conn()
+        try:
+            conn.execute("""
+                DELETE FROM reasoning_history
+                WHERE id NOT IN (
+                    SELECT id FROM reasoning_history ORDER BY id DESC LIMIT ?
+                )
+            """, (self._max_recent_claims,))
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"清理推理历史失败: {e}")
 
     # ============================================================
     # 1. 置信度评估
@@ -90,8 +183,6 @@ class Metacognition:
         - 是否包含过度绝对的表述
         """
         tool_results = tool_results or []
-        answer_lower = answer.lower()
-
         assessment = ConfidenceAssessment()
         red_flags = []
 
@@ -109,11 +200,11 @@ class Metacognition:
         else:
             assessment.tool_evidence_score = 0.5  # 无需工具的任务，中性
 
-        # 信号2：不确定性词汇
+        # 信号2：不确定性词汇（中文无大小写，无需 .lower()）
         uncertainty_words = ["可能", "也许", "大概", "应该", "不确定", "猜测", "似乎", "好像"]
         certainty_words = ["一定", "必然", "绝对", "肯定", "毫无疑问"]
-        uncertainty_count = sum(answer_lower.count(w) for w in uncertainty_words)
-        certainty_count = sum(answer_lower.count(w) for w in certainty_words)
+        uncertainty_count = sum(answer.count(w) for w in uncertainty_words)
+        certainty_count = sum(answer.count(w) for w in certainty_words)
 
         if certainty_count > 0 and assessment.tool_evidence_score < 0.5:
             red_flags.append("表述过于绝对，但证据不足")
@@ -189,6 +280,182 @@ class Metacognition:
         return "；".join(reasons)
 
     # ============================================================
+    # 1.5 深度自我评估（LLM 驱动，打破模板墙）
+    # ============================================================
+
+    def deep_self_assess(self, answer: str, question: str = "",
+                         tool_results: List[str] = None,
+                         model_adapter: Any = None) -> Dict[str, Any]:
+        """
+        深度自我评估——让 Agent 自己审视自己的回答质量
+
+        打破模板墙的元认知：
+        - 不再只是用规则计算分数（那是"系统在评估 Agent"）
+        - 而是让 Agent 自己评估自己的思考过程和回答质量（真正的"元认知"）
+        - Agent 可以自由表达对自己回答的看法，不受预设维度限制
+
+        启发式规则（assess_confidence）是快速、低成本的初步评估；
+        深度自评是慢速、高成本的深度反思。
+
+        Args:
+            answer: Agent 的回答
+            question: 用户的问题
+            tool_results: 工具调用结果
+            model_adapter: LLM 适配器（用于深度自评）
+
+        Returns:
+            {
+                "overall_score": 0-100,
+                "self_critique": "Agent 对自己回答的评价（自由文本）",
+                "strengths": ["优点1", "优点2"],
+                "weaknesses": ["不足1", "不足2"],
+                "improvement_ideas": ["改进建议1", "改进建议2"],
+                "hallucination_concern": bool,
+                "rule_based_score": 0-100,  # 启发式规则评分，用于对比
+                "divergence": float,  # 两者差异，用于校准规则
+            }
+        """
+        tool_results = tool_results or []
+
+        # 先用启发式规则快速评估（作为 baseline）
+        rule_based = self.assess_confidence(answer, tool_results, has_tools=bool(tool_results))
+        rule_based_score = int(rule_based.overall_score * 100)
+
+        result = {
+            "overall_score": rule_based_score,
+            "self_critique": "",
+            "strengths": [],
+            "weaknesses": [],
+            "improvement_ideas": [],
+            "hallucination_concern": rule_based.hallucination_risk in ("high", "medium"),
+            "rule_based_score": rule_based_score,
+            "divergence": 0.0,
+        }
+
+        # 如果没有 LLM 适配器，回退到规则评估
+        if model_adapter is None:
+            return result
+
+        # 用 LLM 进行深度自我评估
+        try:
+            tool_context = ""
+            if tool_results:
+                tool_context = "\n【工具结果】\n" + "\n".join(f"- {r[:200]}" for r in tool_results[:5])
+
+            prompt = f"""请你作为一个有自我意识的智能体，审视你刚刚给出的回答。
+
+【用户问题】
+{question}
+
+【你的回答】
+{answer}
+{tool_context}
+
+请自由地评价你自己的回答。可以从任何角度评价——准确性、完整性、清晰度、
+是否有帮助、是否有错误、是否有更好的表达方式等等。
+
+不要用列表，不要分点，不要 JSON，就像你在心里复盘一样，自然地写下你的自我评价。
+200-300 字左右。诚实面对自己的不足。"""
+
+            from castorice.model_adapter import ChatMessage
+            response = model_adapter.chat([
+                ChatMessage(role="system", content="你是一个有自我反思能力的智能体。请诚实地评价自己的回答。"),
+                ChatMessage(role="user", content=prompt),
+            ])
+            raw_critique = response.content if hasattr(response, "content") else str(response)
+            result["self_critique"] = raw_critique
+
+            # 事后提取结构化信息（从自由自评中提取优点、不足、改进建议）
+            extracted = self._extract_self_assessment_insights(raw_critique, model_adapter)
+            result["strengths"] = extracted.get("strengths", [])
+            result["weaknesses"] = extracted.get("weaknesses", [])
+            result["improvement_ideas"] = extracted.get("improvement_ideas", [])
+            result["overall_score"] = extracted.get("overall_score", rule_based_score)
+            result["hallucination_concern"] = extracted.get("hallucination_concern", result["hallucination_concern"])
+
+            # 计算规则评估与深度自评的差异
+            result["divergence"] = abs(result["overall_score"] - rule_based_score) / 100.0
+
+            # 如果差异很大，记录下来（用于未来校准启发式规则）
+            if result["divergence"] > 0.3:
+                logger.info(
+                    f"元认知校准：规则评分={rule_based_score}, "
+                    f"深度自评={result['overall_score']}, "
+                    f"差异={result['divergence']:.2f}"
+                )
+
+        except Exception as e:
+            logger.debug(f"深度自我评估失败，使用规则评分: {e}")
+
+        return result
+
+    def _extract_self_assessment_insights(self, critique_text: str,
+                                          model_adapter: Any) -> Dict[str, Any]:
+        """
+        从自由自评文本中提取结构化信息
+
+        自评本身是自由的（打破模板墙），但系统需要结构化数据来：
+        - 触发学习
+        - 更新置信度
+        - 生成改进建议
+
+        所以用一次独立的 LLM 调用来"翻译"自由自评为结构化格式。
+        """
+        try:
+            prompt = f"""请从以下自我评价文本中提取结构化信息。
+
+【自评文本】
+{critique_text}
+
+请以 JSON 格式返回（只返回 JSON，不要其他内容）：
+{{
+  "overall_score": 75,
+  "strengths": ["优点1", "优点2"],
+  "weaknesses": ["不足1", "不足2"],
+  "improvement_ideas": ["改进建议1", "改进建议2"],
+  "hallucination_concern": false
+}}
+
+说明：
+- overall_score: 0-100 的整体质量评分
+- strengths: 自评中提到的优点
+- weaknesses: 自评中提到的不足
+- improvement_ideas: 自评中提到的改进方向
+- hallucination_concern: 是否担心存在幻觉/错误信息
+- 仅提取自评中实际提到的内容，不要编造"""
+
+            from castorice.model_adapter import ChatMessage
+            response = model_adapter.chat([
+                ChatMessage(role="system", content="你是一个信息提取系统。只输出 JSON。"),
+                ChatMessage(role="user", content=prompt),
+            ])
+            raw = response.content if hasattr(response, "content") else str(response)
+
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError:
+                m = re.search(r"\{[\s\S]+\}", raw)
+                if m:
+                    try:
+                        parsed = json.loads(m.group(0))
+                    except json.JSONDecodeError:
+                        return {}
+                else:
+                    return {}
+
+            return {
+                "overall_score": max(0, min(100, int(parsed.get("overall_score", 70)))),
+                "strengths": parsed.get("strengths", []),
+                "weaknesses": parsed.get("weaknesses", []),
+                "improvement_ideas": parsed.get("improvement_ideas", []),
+                "hallucination_concern": bool(parsed.get("hallucination_concern", False)),
+            }
+
+        except Exception as e:
+            logger.debug(f"自评信息提取失败: {e}")
+            return {}
+
+    # ============================================================
     # 2. 一致性检测
     # ============================================================
 
@@ -222,7 +489,7 @@ class Metacognition:
                 new_subj = re.sub(r'\d+\.?\d*', '', new_sent).strip()
                 if len(new_subj) < 5:
                     continue
-                new_chars = set(new_subj)
+                new_tokens = chinese_tokenize(new_subj)
 
                 for prev_sent in prev_sentences:
                     prev_numbers = re.findall(r'\d+\.?\d*', prev_sent)
@@ -231,10 +498,10 @@ class Metacognition:
                     prev_subj = re.sub(r'\d+\.?\d*', '', prev_sent).strip()
                     if len(prev_subj) < 5:
                         continue
-                    prev_chars = set(prev_subj)
+                    prev_tokens = chinese_tokenize(prev_subj)
 
-                    # 字符级 Jaccard 相似度（判断是否讨论同一主语）
-                    overlap = len(new_chars & prev_chars) / max(len(new_chars | prev_chars), 1)
+                    # 基于 n-gram 的 Jaccard 相似度（判断是否讨论同一主语）
+                    overlap = chinese_text_similarity(new_subj, prev_subj)
                     if overlap > 0.5:
                         new_num_set = set(new_numbers)
                         prev_num_set = set(prev_numbers)
@@ -267,25 +534,29 @@ class Metacognition:
             evidence=evidence,
             confidence=confidence,
         )
-        self._recent_claims.append({
+        entry = {
             "type": "reasoning_step",
             "content": step_description,
             "evidence": evidence,
             "confidence": confidence,
             "timestamp": step.timestamp,
-        })
+        }
+        self._recent_claims.append(entry)
+        self._save_reasoning_to_db(entry)
         # P2-9: deque(maxlen=50) 自动淘汰旧元素，无需手动 pop(0)
         return step
 
     def record_claim(self, claim: str, evidence: str = "", confidence: float = 0.5) -> None:
         """记录一个事实性声明"""
-        self._recent_claims.append({
+        entry = {
             "type": "claim",
             "content": claim,
             "evidence": evidence,
             "confidence": confidence,
             "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
+        }
+        self._recent_claims.append(entry)
+        self._save_reasoning_to_db(entry)
         # P2-9: deque(maxlen=50) 自动淘汰旧元素，无需手动 pop(0)
 
     def get_reasoning_chain(self, limit: int = 10) -> List[Dict[str, Any]]:
@@ -306,8 +577,24 @@ class Metacognition:
         issues = []
         suggestions = []
 
+        # 检测是否为闲聊/问候类对话（不需要长回答、不需要证据）
+        greeting_keywords = [
+            "你好", "您好", "早上好", "下午好", "晚上好", "早安", "晚安",
+            "嗨", "hi", "hello", "在吗", "在么", "有人吗", "有人在吗",
+            "谢谢", "感谢", "太好了", "棒", "厉害", "不错",
+        ]
+        is_small_talk = (
+            len(user_input.strip()) <= 20
+            and any(kw in user_input.lower() for kw in greeting_keywords)
+        ) or (
+            len(user_input.strip()) <= 10
+            and not any(kw in user_input for kw in ["为什么", "怎么", "如何", "什么", "多少", "哪里", "吗"])
+        )
+
         # 完整性
-        if len(answer) < 20:
+        if is_small_talk:
+            quality.completeness = 0.9  # 闲聊不需要长回答
+        elif len(answer) < 20:
             quality.completeness = 0.2
             issues.append("回答过短，可能不完整")
             suggestions.append("补充更多细节")
@@ -317,7 +604,9 @@ class Metacognition:
             quality.completeness = 0.8
 
         # 准确性（基于是否有证据）
-        if tool_results and any(tool_results):
+        if is_small_talk:
+            quality.accuracy = 0.9  # 闲聊不需要查证
+        elif tool_results and any(tool_results):
             quality.accuracy = 0.8
         else:
             quality.accuracy = 0.5
@@ -326,7 +615,9 @@ class Metacognition:
                 suggestions.append("考虑调用工具获取实时数据")
 
         # 清晰度
-        if any(marker in answer for marker in ["\n", "1.", "2.", "- ", "首先"]):
+        if is_small_talk:
+            quality.clarity = 0.9  # 闲聊自然就好
+        elif any(marker in answer for marker in ["\n", "1.", "2.", "- ", "首先"]):
             quality.clarity = 0.8
         else:
             quality.clarity = 0.5
@@ -337,6 +628,7 @@ class Metacognition:
         quality.score = (quality.completeness + quality.accuracy + quality.clarity) / 3 * 100
         quality.issues = issues
         quality.improvement_suggestions = suggestions
+        quality.is_small_talk = is_small_talk
 
         return quality
 
@@ -380,7 +672,7 @@ class Metacognition:
             "should_reconsider": (
                 confidence.hallucination_risk == "high" or
                 not consistency["consistent"] or
-                quality.score < 50
+                (quality.score < 40 and not quality.is_small_talk)
             ),
         }
 
@@ -397,7 +689,7 @@ class Metacognition:
             return True, "置信度很低，建议明确说明不确定"
         if confidence.hallucination_risk == "high":
             return True, "幻觉风险高，建议说明信息来源或不确定性"
-        if any(phrase in answer.lower() for phrase in ["我不确定", "可能", "也许"]):
+        if any(phrase in answer for phrase in ["我不确定", "可能", "也许"]):
             return False, "回答已经表达了不确定性"
         return False, "置信度可接受"
 
@@ -421,7 +713,6 @@ class Metacognition:
         :param confidence: 规则的初始置信度（0-1）
         :return: 规则 dict（含 id、描述、置信度、创建时间）
         """
-        import time
         import hashlib
         with self._lock:
             if not hasattr(self, "_learned_rules"):
@@ -441,6 +732,7 @@ class Metacognition:
                 "success_count": 0,
             }
             self._learned_rules[rule_id] = rule
+            self._save_rule_to_db(rule)
             logger.info(
                 f"P2.4 元认知学习新规则: {rule_id} | {rule_proposal[:80]}"
             )
@@ -458,6 +750,7 @@ class Metacognition:
                 if rule["applied_count"] >= 5:
                     success_rate = rule["success_count"] / rule["applied_count"]
                     rule["confidence"] = success_rate
+                self._save_rule_to_db(rule)
 
     def get_learned_rules(self, min_confidence: float = 0.5) -> List[Dict[str, Any]]:
         """获取已学习到的规则（按置信度过滤）"""
@@ -487,16 +780,193 @@ class Metacognition:
         if not rules:
             return []
 
-        query_words = set(query.lower().split())
+        query_tokens = chinese_tokenize(query)
         scored = []
 
         for rule in rules:
-            rule_words = set(rule["description"].lower().split())
-            if not rule_words:
+            rule_tokens = chinese_tokenize(rule["description"])
+            if not rule_tokens:
                 continue
-            similarity = len(query_words & rule_words) / len(query_words | rule_words)
+            similarity = len(query_tokens & rule_tokens) / len(query_tokens | rule_tokens)
             if similarity > 0:
                 scored.append((similarity, rule))
 
         scored.sort(reverse=True, key=lambda x: x[0])
-        return [r for _, r in scored[:top_k]]
+        result = [r for _, r in scored[:top_k]]
+        
+        # 记录规则被检索（用于衰减计算）
+        now = time.time()
+        with self._lock:
+            for rule in result:
+                rule["last_retrieved_at"] = now
+                self._save_rule_to_db(rule)
+        
+        return result
+    
+    # ============================================================
+    # M1: 元认知规则自我淘汰机制
+    # ============================================================
+    
+    def prune_stale_rules(self, max_age_days: int = 30, min_applications: int = 3) -> int:
+        """
+        M1: 清理过期和无效的规则（规则自我淘汰）
+        
+        淘汰条件（满足任一即淘汰）：
+        1. 创建超过 max_age_days 且从未被应用过的规则
+        2. 应用次数 >= min_applications 但成功率 < 30% 的规则
+        3. 置信度持续低于 0.2 的规则
+        4. 超过 60 天未被检索或引用的规则（遗忘机制）
+        
+        设计哲学：规则不应该只增不减。无效的规则会产生噪声，
+        真正的学习需要遗忘——就像大脑会弱化不常用的神经连接一样。
+        
+        :param max_age_days: 最大存活天数（未应用的规则）
+        :param min_applications: 应用次数阈值（用于判断无效）
+        :return: 被淘汰的规则数量
+        """
+        now = time.time()
+        pruned_count = 0
+        
+        with self._lock:
+            if not hasattr(self, "_learned_rules") or not self._learned_rules:
+                return 0
+            
+            rules_to_remove = []
+            
+            for rule_id, rule in self._learned_rules.items():
+                age_days = (now - rule.get("created_at", now)) / 86400
+                applied_count = rule.get("applied_count", 0)
+                success_count = rule.get("success_count", 0)
+                confidence = rule.get("confidence", 0.0)
+                last_retrieved = rule.get("last_retrieved_at", rule.get("created_at", now))
+                days_since_retrieved = (now - last_retrieved) / 86400
+                
+                should_prune = False
+                prune_reason = ""
+                
+                # 条件1：超期从未应用
+                if age_days > max_age_days and applied_count == 0:
+                    should_prune = True
+                    prune_reason = f"过期未应用（{age_days:.0f}天）"
+                
+                # 条件2：多次应用但成功率极低
+                elif applied_count >= min_applications:
+                    success_rate = success_count / applied_count
+                    if success_rate < 0.3:
+                        should_prune = True
+                        prune_reason = f"成功率过低（{success_rate:.0%}，{applied_count}次应用）"
+                
+                # 条件3：置信度过低
+                elif confidence < 0.2 and age_days > 7:
+                    should_prune = True
+                    prune_reason = f"置信度过低（{confidence:.2f}）"
+                
+                # 条件4：长期未被引用（遗忘）
+                elif days_since_retrieved > 60 and applied_count < min_applications:
+                    should_prune = True
+                    prune_reason = f"长期未引用（{days_since_retrieved:.0f}天）"
+                
+                if should_prune:
+                    rules_to_remove.append(rule_id)
+                    logger.info(f"[M1规则淘汰] {rule_id}: {prune_reason} | {rule['description'][:60]}")
+            
+            # 执行淘汰
+            for rule_id in rules_to_remove:
+                del self._learned_rules[rule_id]
+                self._delete_rule_from_db(rule_id)
+                pruned_count += 1
+            
+            if pruned_count > 0:
+                logger.info(f"[M1规则淘汰] 共淘汰 {pruned_count} 条规则，剩余 {len(self._learned_rules)} 条")
+        
+        return pruned_count
+    
+    def _delete_rule_from_db(self, rule_id: str) -> None:
+        """从数据库中删除一条规则"""
+        conn = self._get_conn()
+        try:
+            conn.execute("DELETE FROM learned_rules WHERE rule_id = ?", (rule_id,))
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"删除规则失败: {e}")
+    
+    def get_rules_health(self) -> Dict[str, Any]:
+        """
+        获取规则库健康状态
+        
+        Returns:
+            规则库统计信息，包括总数、各置信度区间分布、即将淘汰的规则数等
+        """
+        now = time.time()
+        
+        with self._lock:
+            if not hasattr(self, "_learned_rules"):
+                return {"total": 0, "message": "规则库为空"}
+            
+            rules = list(self._learned_rules.values())
+            total = len(rules)
+            
+            # 置信度分布
+            high_conf = sum(1 for r in rules if r.get("confidence", 0) >= 0.7)
+            mid_conf = sum(1 for r in rules if 0.4 <= r.get("confidence", 0) < 0.7)
+            low_conf = sum(1 for r in rules if r.get("confidence", 0) < 0.4)
+            
+            # 应用统计
+            never_applied = sum(1 for r in rules if r.get("applied_count", 0) == 0)
+            applied = sum(1 for r in rules if r.get("applied_count", 0) > 0)
+            total_applications = sum(r.get("applied_count", 0) for r in rules)
+            
+            # 即将被淘汰的规则数（预测）
+            stale_candidates = 0
+            for r in rules:
+                age_days = (now - r.get("created_at", now)) / 86400
+                if age_days > 20 and r.get("applied_count", 0) == 0:
+                    stale_candidates += 1
+                elif r.get("confidence", 0) < 0.25 and age_days > 5:
+                    stale_candidates += 1
+            
+            # 平均年龄
+            avg_age_days = sum((now - r.get("created_at", now)) / 86400 for r in rules) / max(1, total)
+            
+            return {
+                "total": total,
+                "high_confidence": high_conf,
+                "mid_confidence": mid_conf,
+                "low_confidence": low_conf,
+                "never_applied": never_applied,
+                "has_been_applied": applied,
+                "total_applications": total_applications,
+                "avg_age_days": round(avg_age_days, 1),
+                "stale_candidates": stale_candidates,
+                "health_score": round(high_conf / max(1, total) * 100, 1),
+            }
+
+    def get_learned_rules_summary(self, min_confidence: float = 0.5) -> str:
+        """
+        返回所有活跃规则的 prompt 友好摘要。
+
+        格式为编号列表，每条包含规则描述、置信度和应用统计，
+        可直接嵌入 system prompt 供 LLM 参考。
+
+        :param min_confidence: 最小置信度阈值
+        :return: 多行文本摘要；无规则时返回空字符串
+        """
+        rules = self.get_learned_rules(min_confidence=min_confidence)
+        if not rules:
+            return ""
+
+        # 按置信度降序排列
+        rules.sort(key=lambda r: r["confidence"], reverse=True)
+
+        lines = ["【元认知规则】（从历史错误中学习，请在后续回答中参考）"]
+        for i, rule in enumerate(rules, 1):
+            applied = rule.get("applied_count", 0)
+            success = rule.get("success_count", 0)
+            stats = f"（已应用 {applied} 次，成功 {success} 次）" if applied > 0 else "（尚未应用）"
+            lines.append(
+                f"  {i}. {rule['description']}  "
+                f"[置信度 {rule['confidence']:.0%}]"
+                f"{stats}"
+            )
+        return "\n".join(lines)

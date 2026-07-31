@@ -9,6 +9,16 @@ import asyncio
 import logging
 
 
+def _run_async(coro):
+    """在共享事件循环中运行协程，避免每次创建新循环导致 async 资源绑定失败。"""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop.run_until_complete(coro)
+
+
 class CLIHandler:
     """命令行处理器"""
 
@@ -25,6 +35,15 @@ class CLIHandler:
 
         session_id = self.engine.short_term.create_session()
         self.engine.user_profile.record_interaction()
+
+        # 注册意识引擎的脱口而出回调（让 Agent 能主动说话到终端）
+        _speak_cb = None
+        if hasattr(self.engine, 'consciousness') and self.engine.consciousness:
+            def _speak_to_cli(content: str) -> None:
+                print(f"\n\033[35m[Castorice 主动说] {content}\033[0m", end="", flush=True)
+            _speak_cb = _speak_to_cli
+            self.engine.consciousness.register_speak_callback(_speak_cb)
+            self.logger.info("意识引擎说话回调已注册到 CLI")
 
         while True:
             try:
@@ -43,8 +62,18 @@ class CLIHandler:
 
             try:
                 print("\n[Castorice] ", end="", flush=True)
+                _output_parts = []
+
+                def _track_and_print(chunk):
+                    _output_parts.append(chunk)
+                    print(chunk, end="", flush=True)
+
                 state = self.engine.agent.run(user_input, session_id=session_id,
-                                              stream_callback=lambda chunk: (print(chunk, end="", flush=True)))
+                                              stream_callback=_track_and_print)
+
+                streamed = "".join(_output_parts).strip()
+                if not streamed and state.final_answer:
+                    print(state.final_answer, end="", flush=True)
                 print()
 
                 if state.errors:
@@ -103,6 +132,11 @@ class CLIHandler:
   /http_stop  - 停止 HTTP 服务器
   /cron_start - 启动定时任务调度器（后台运行）
   /cron_stop  - 停止定时任务调度器
+  /auto_start - 启动自主循环（后台运行，Agent 空闲时自己做事）
+  /auto_stop  - 停止自主循环
+  /consciousness_start - 启动意识引擎（持续思维流 + 脱口而出）
+  /consciousness_stop  - 停止意识引擎
+  /consciousness_toggle_speak - 切换是否允许主动说话
   /services   - 查看所有后台服务状态
 
   /exit       - 退出程序
@@ -144,7 +178,7 @@ class CLIHandler:
                 print("反思引擎未启用")
             else:
                 print("正在触发自我反思（可能需要几秒）...")
-                result = asyncio.run(engine.reflect(trigger_reason="手动触发"))
+                result = _run_async(engine.reflect(trigger_reason="手动触发"))
                 print(f"\n✓ 反思完成")
                 if result.patterns_observed:
                     print("\n观察到的行为模式:")
@@ -251,6 +285,53 @@ class CLIHandler:
                 print("✓ 定时任务调度器已停止")
             else:
                 print("✗ 定时任务调度器未运行")
+        elif op == "/auto_start":
+            if self.engine.start_service("auto"):
+                import time
+                time.sleep(0.5)
+                status = self.engine.get_service_status().get("auto", {})
+                if status.get("error"):
+                    print(f"✗ 自主循环启动失败: {status['error']}")
+                else:
+                    interval_min = status.get("interval_seconds", 900) // 60
+                    idle_min = status.get("idle_threshold_seconds", 300) // 60
+                    print(f"✓ 自主循环已在后台启动")
+                    print(f"  唤醒间隔: {interval_min} 分钟")
+                    print(f"  空闲阈值: {idle_min} 分钟（用户活跃时不打扰）")
+            else:
+                print("✗ 自主循环启动失败（可能已在运行）")
+        elif op == "/auto_stop":
+            if self.engine.stop_service("auto"):
+                print("✓ 自主循环已停止")
+            else:
+                print("✗ 自主循环未运行")
+        elif op == "/consciousness_start":
+            if self.engine.start_service("consciousness"):
+                import time
+                time.sleep(0.5)
+                status = self.engine.get_service_status().get("consciousness", {})
+                if status.get("error"):
+                    print(f"✗ 意识引擎启动失败: {status['error']}")
+                else:
+                    print(f"✓ 意识引擎已在后台启动")
+                    print(f"  后台间隔: {status.get('bg_interval', '10-30s')}")
+                    print(f"  前台间隔: {status.get('fg_interval', '60-180s')}")
+                    print(f"  空闲阈值: {status.get('idle_threshold', 180)}s")
+                    print(f"  脱口而出: {'启用' if status.get('speak_enabled') else '禁用'}")
+            else:
+                print("✗ 意识引擎启动失败（可能已在运行）")
+        elif op == "/consciousness_stop":
+            if self.engine.stop_service("consciousness"):
+                print("✓ 意识引擎已停止")
+            else:
+                print("✗ 意识引擎未运行")
+        elif op == "/consciousness_toggle_speak":
+            cs = getattr(self.engine, 'consciousness', None)
+            if cs:
+                cs._speak_enabled = not cs._speak_enabled
+                print(f"✓ 脱口而出: {'启用' if cs._speak_enabled else '禁用'}")
+            else:
+                print("✗ 意识引擎未启动")
         elif op == "/services":
             status = self.engine.get_service_status()
             print("━" * 50)
@@ -280,6 +361,29 @@ class CLIHandler:
                 print(f"    反思: {reflect_min} 分钟 / 清理: {cleanup_hr} 小时")
             elif cron.get("error"):
                 print(f"    错误: {cron['error']}")
+
+            auto = status.get("auto", {})
+            auto_running = auto.get("status") == "running"
+            print(f"  自主循环:       {'🟢 运行中' if auto_running else '🔴 已停止'}")
+            if auto_running:
+                interval_min = auto.get("interval_seconds", 900) // 60
+                last = auto.get("last_action", "(无)")
+                total = sum(auto.get("action_count", {}).values())
+                print(f"    间隔: {interval_min} 分钟 / 总行动: {total} 次 / 上次: {last}")
+            elif auto.get("error"):
+                print(f"    错误: {auto['error']}")
+
+            cs = status.get("consciousness", {})
+            cs_running = cs.get("status") == "running"
+            print(f"  意识引擎:       {'🟢 运行中' if cs_running else '🔴 已停止'}")
+            if cs_running:
+                mode = cs.get("mode", "background")
+                thoughts = cs.get("thought_count", 0)
+                spoken = cs.get("spoken_count", 0)
+                speak = "🟢" if cs.get("speak_enabled") else "🔴"
+                print(f"    模式: {mode} / 念头: {thoughts} / 主动说: {spoken} / 发言: {speak}")
+            elif cs.get("error"):
+                print(f"    错误: {cs['error']}")
 
             print("━" * 50)
         else:
@@ -340,9 +444,9 @@ class CLIHandler:
     def _reload_tools(self) -> None:
         """热更新工具列表"""
         try:
-            from castorice.tools.base_tools import reload_tools
+            from castorice.tools.base_tools import reload_tools, get_base_tools
             reload_tools()
-            self.engine.tools = self.engine._get_base_tools()
+            self.engine.tools = get_base_tools(self.engine.config.raw().get("tools", {}))
             self.engine.agent.tools_list = self.engine.tools
             self.engine.agent.available_tools_desc = "\n".join(f"- {t.name}: {t.description}" for t in self.engine.tools)
             print("工具已重新加载")

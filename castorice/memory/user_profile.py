@@ -95,6 +95,7 @@ class UserProfile:
                 if 'tmp_path' in locals() and os.path.exists(tmp_path):
                     os.unlink(tmp_path)
             except Exception:
+                logger.debug(f"静默异常 [castorice/memory/user_profile.py:97]")
                 pass
 
     def get(self, dotted_key: str, default: Any = None) -> Any:

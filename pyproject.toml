@@ -1,7 +1,7 @@
 [project]
 name = "castorice-agent"
-version = "2.5.0"
-description = "自进化智能体 - 复刻 Hermes Agent 架构，自研主循环"
+version = "3.0.0"
+description = "自主进化的 AI Agent 框架 - 分层自我概念 + 自主循环 + 多模型原生适配，零 LangGraph 依赖"
 authors = [{ name = "Castorice Team" }]
 readme = "README.md"
 license = {text = "MIT"}

@@ -20,8 +20,9 @@ import logging
 import re
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from castorice.model_adapter import ChatMessage, ModelAdapter
@@ -297,7 +298,18 @@ class TaskExecutor:
 
                 # 等待至少一个完成
                 if futures:
-                    done_futures = list(as_completed(futures, timeout=60.0))
+                    try:
+                        done_futures = list(as_completed(futures, timeout=60.0))
+                    except TimeoutError:
+                        # 60s 内未全部完成：已完成的照常处理，超时的标记 failed
+                        done_futures = [f for f in list(futures.keys()) if f.done()]
+                        for future in list(futures.keys()):
+                            if not future.done():
+                                st = futures.pop(future)
+                                logger.warning(f"子任务 {st.id} 执行超时(60s)")
+                                st.status = "failed"
+                                st.error = "执行超时(60s)"
+                                future.cancel()
                     for future in done_futures:
                         subtask = futures.pop(future, None)
                         if subtask:
@@ -346,7 +358,6 @@ class TaskExecutor:
                     break
                 except Exception as e:
                     subtask.retry_count += 1
-                    from castorice.self_organization import ErrorRecoveryStrategy
                     if ErrorRecoveryStrategy.should_retry(subtask.tool, subtask.retry_count):
                         delay = ErrorRecoveryStrategy.get_retry_delay(subtask.tool, subtask.retry_count)
                         logger.info(f"子任务 {subtask.id} 工具 {subtask.tool} 失败，{delay}s后重试...")
@@ -382,7 +393,6 @@ class TaskExecutor:
             return {"query": desc}
         
         elif subtask.tool == "get_weather":
-            import re
             city_patterns = [
                 r'在(\w+市|\w+省|\w+区|\w+县)',
                 r'(\w+市|\w+省|\w+区|\w+县)的天气',
@@ -396,14 +406,12 @@ class TaskExecutor:
             return {"city": desc}
         
         elif subtask.tool in ("read_file", "read_document"):
-            import re
             paths = re.findall(r'[\w./\\~\-]+\.[a-zA-Z0-9]+', desc)
             if paths:
                 return {"file_path": paths[0]}
             return {"file_path": desc}
         
         elif subtask.tool == "write_file":
-            import re
             paths = re.findall(r'[\w./\\~\-]+\.[a-zA-Z0-9]+', desc)
             content_match = re.search(r'内容[:：]\s*(.+)$', desc, re.DOTALL)
             args = {}
@@ -430,9 +438,6 @@ class TaskExecutor:
 
         根据子任务描述和工具类型，让 LLM 推断最合适的参数值。
         """
-        from castorice.model_adapter import ChatMessage
-        from castorice.utils import extract_json
-
         tool_info = {}
         if subtask.tool in self.tools:
             tool = self.tools[subtask.tool]
@@ -561,9 +566,72 @@ class ThinkingStrategySelector:
         "factual": "适合需要准确信息的问题（优先用工具查证 → 区分事实和观点）",
         "conversational": "适合闲聊和简单问答（友好、简洁、自然）",
     }
+    
+    # W1: 思维策略对应的行为参数（影响 Agent 的实际行为，而不只是文字描述）
+    STRATEGY_BEHAVIOR_PARAMS = {
+        "analytical": {
+            "reflection_interval_turns": 8,       # 反思频率
+            "tool_confidence_threshold": 0.6,     # 工具调用置信度阈值
+            "answer_min_length": 200,             # 最短回答长度
+            "max_tool_calls": 5,                  # 最大工具调用次数
+            "use_deep_reflection": False,         # 是否用深度反思
+            "creativity_level": 0.3,              # 创造力水平 0-1
+        },
+        "creative": {
+            "reflection_interval_turns": 15,
+            "tool_confidence_threshold": 0.4,
+            "answer_min_length": 300,
+            "max_tool_calls": 3,
+            "use_deep_reflection": False,
+            "creativity_level": 0.9,
+        },
+        "decision": {
+            "reflection_interval_turns": 6,
+            "tool_confidence_threshold": 0.5,
+            "answer_min_length": 150,
+            "max_tool_calls": 8,
+            "use_deep_reflection": True,          # 决策用深度反思
+            "creativity_level": 0.5,
+        },
+        "factual": {
+            "reflection_interval_turns": 10,
+            "tool_confidence_threshold": 0.3,     # 事实型更依赖工具查证
+            "answer_min_length": 100,
+            "max_tool_calls": 10,
+            "use_deep_reflection": False,
+            "creativity_level": 0.2,
+        },
+        "conversational": {
+            "reflection_interval_turns": 20,
+            "tool_confidence_threshold": 0.7,
+            "answer_min_length": 50,
+            "max_tool_calls": 1,
+            "use_deep_reflection": False,
+            "creativity_level": 0.6,
+        },
+        # 沉思型：深度思考，少但精
+        "contemplative": {
+            "reflection_interval_turns": 5,
+            "tool_confidence_threshold": 0.5,
+            "answer_min_length": 400,
+            "max_tool_calls": 4,
+            "use_deep_reflection": True,
+            "creativity_level": 0.7,
+        },
+        # 实验型：大胆尝试，快速迭代
+        "experimental": {
+            "reflection_interval_turns": 3,
+            "tool_confidence_threshold": 0.3,
+            "answer_min_length": 100,
+            "max_tool_calls": 15,
+            "use_deep_reflection": False,
+            "creativity_level": 1.0,
+        },
+    }
 
     def __init__(self, model_adapter=None):
         self.model = model_adapter
+        self._custom_strategies: Dict[str, Dict[str, Any]] = {}  # W1: 自定义策略及参数
 
     def select(self, user_input: str) -> Tuple[str, str]:
         """
@@ -588,9 +656,6 @@ class ThinkingStrategySelector:
 
     def _llm_select(self, user_input: str) -> Tuple[str, str]:
         """用 LLM 自主决定思维策略"""
-        from castorice.model_adapter import ChatMessage
-        from castorice.utils import extract_json
-
         ref_text = "\n".join(f"- {k}: {v}" for k, v in self.REFERENCE_STRATEGIES.items())
         prompt = f"""请选择最适合回答用户问题的思维模式。
 
@@ -628,6 +693,118 @@ class ThinkingStrategySelector:
     def get_strategy_name(cls, key: str) -> str:
         """获取策略名称"""
         return cls.REFERENCE_STRATEGIES.get(key, key)
+    
+    # ============================================================
+    # W1: 思维策略的行为参数化（策略真正影响行为，不只是文字）
+    # ============================================================
+    
+    def get_behavior_params(self, strategy_name: str) -> Dict[str, Any]:
+        """
+        W1: 获取策略对应的行为参数
+        
+        策略不再只是一段文字描述，而是真正影响 Agent 行为的参数配方：
+        - 反思频率
+        - 工具调用阈值
+        - 回答长度偏好
+        - 最大工具调用次数
+        - 是否使用深度反思
+        - 创造力水平
+        
+        Args:
+            strategy_name: 策略名称
+            
+        Returns:
+            行为参数字典
+        """
+        # 先查自定义策略
+        if strategy_name in self._custom_strategies:
+            base = self.STRATEGY_BEHAVIOR_PARAMS.get("analytical", {}).copy()
+            base.update(self._custom_strategies[strategy_name].get("params", {}))
+            return base
+        
+        # 再查内置策略
+        if strategy_name in self.STRATEGY_BEHAVIOR_PARAMS:
+            return self.STRATEGY_BEHAVIOR_PARAMS[strategy_name].copy()
+        
+        # 未知策略：用 analytical 作为基线
+        return self.STRATEGY_BEHAVIOR_PARAMS.get("analytical", {}).copy()
+    
+    def create_custom_strategy(
+        self,
+        name: str,
+        description: str,
+        thinking_prompt: str,
+        behavior_params: Dict[str, Any] = None,
+    ) -> Dict[str, Any]:
+        """
+        W1: 创建自定义思维策略（含行为参数）
+        
+        Agent 可以自己创造新的思维策略，并且这些策略有真实的行为参数，
+        而不只是一段文字描述。
+        
+        Args:
+            name: 策略名称
+            description: 策略描述
+            thinking_prompt: 注入 system prompt 的思维引导语
+            behavior_params: 行为参数覆盖（可选）
+            
+        Returns:
+            创建的策略信息
+        """
+        strategy_info = {
+            "name": name,
+            "description": description,
+            "thinking_prompt": thinking_prompt,
+            "params": behavior_params or {},
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "used_count": 0,
+        }
+        
+        self._custom_strategies[name] = strategy_info
+        
+        # 同时加入参考策略列表
+        self.REFERENCE_STRATEGIES[name] = description
+        
+        logger.info(f"[W1策略创造] 新策略: {name} | 参数: {list(behavior_params.keys()) if behavior_params else '默认'}")
+        return strategy_info
+    
+    def record_strategy_usage(self, strategy_name: str, success: bool = True) -> None:
+        """记录策略使用结果（用于评估策略效果）"""
+        if strategy_name in self._custom_strategies:
+            self._custom_strategies[strategy_name]["used_count"] += 1
+            if "success_count" not in self._custom_strategies[strategy_name]:
+                self._custom_strategies[strategy_name]["success_count"] = 0
+            if success:
+                self._custom_strategies[strategy_name]["success_count"] += 1
+    
+    def list_all_strategies(self) -> List[Dict[str, Any]]:
+        """列出所有可用策略（内置 + 自定义）"""
+        strategies = []
+        
+        # 内置策略
+        for name, desc in self.REFERENCE_STRATEGIES.items():
+            params = self.STRATEGY_BEHAVIOR_PARAMS.get(name, {})
+            strategies.append({
+                "name": name,
+                "description": desc,
+                "is_custom": False,
+                "has_behavior_params": bool(params),
+                "params_count": len(params),
+            })
+        
+        # 自定义策略
+        for name, info in self._custom_strategies.items():
+            strategies.append({
+                "name": name,
+                "description": info.get("description", ""),
+                "is_custom": True,
+                "used_count": info.get("used_count", 0),
+                "success_count": info.get("success_count", 0),
+                "has_behavior_params": bool(info.get("params")),
+                "params_count": len(info.get("params", {})),
+            })
+        
+        return strategies
 
 
 class DialogueStrategy:

@@ -301,6 +301,12 @@ _alert_manager = None
 _alert_manager_lock = threading.Lock()
 
 
+
+def set_alert_manager(instance: AlertManager) -> None:
+    """手动设置全局 AlertManager 实例（Agent 初始化时调用，确保配置生效）"""
+    global _alert_manager
+    with _alert_manager_lock:
+        _alert_manager = instance
 def get_alert_manager() -> AlertManager:
     """获取全局告警管理器单例（P0-8: 双重检查锁保证线程安全）"""
     global _alert_manager

@@ -1,25 +1,49 @@
 """
 HttpServer - HTTP 服务器
 
-提供 REST API 接口。
+对 castorice.adapters.http_server.HTTPServerAdapter 的薄封装，
+保持向后兼容的同时消除重复实现。
 """
 import logging
-import time
+import threading
+
+from castorice.adapters.http_server import HTTPServerAdapter
 
 
-class HttpServer:
-    """HTTP 服务器"""
+class HttpServer(HTTPServerAdapter):
+    """HTTP 服务器（兼容旧接口的薄封装）
+
+    直接继承 HTTPServerAdapter，额外提供：
+    - is_running() / get_status_info() 兼容接口
+    - 从 engine.config 自动读取配置的 __init__
+    """
 
     def __init__(self, engine):
+        http_cfg = engine.config.http_server if hasattr(engine.config, "http_server") else {}
+        if not isinstance(http_cfg, dict):
+            http_cfg = {}
+
+        host = http_cfg.get("host", "0.0.0.0")
+        port = int(http_cfg.get("port", 8000))
+        api_keys = http_cfg.get("api_keys", [])
+        cors_origins = http_cfg.get("cors_origins", ["*"])
+        require_auth = http_cfg.get("require_auth", True)
+
+        super().__init__(
+            engine,
+            host=host,
+            port=port,
+            api_keys=api_keys,
+            cors_origins=cors_origins,
+            require_auth=require_auth,
+        )
         self.engine = engine
         self.logger = logging.getLogger("Castorice.HTTP")
-        self._server = None
-        self._server_thread = None
+        self._host = host
+        self._port = port
         self._running = False
         self._ready = False
-        self._error = None
-        self._host = ""
-        self._port = 0
+        self._stop_event = threading.Event()
 
     def is_running(self) -> bool:
         """检查 HTTP 服务器是否正在运行"""
@@ -30,7 +54,7 @@ class HttpServer:
         return {
             "running": self._running,
             "ready": self._ready,
-            "error": self._error,
+            "error": self.get_error(),
             "host": self._host,
             "port": self._port,
         }
@@ -38,43 +62,17 @@ class HttpServer:
     def run(self) -> None:
         """启动 HTTP 服务器（阻塞模式，由调用方在后台线程中运行）"""
         self._running = True
+        self._stop_event.clear()
         try:
-            from castorice.adapters.http_server import HTTPServerAdapter
-
-            http_cfg = self.engine.config.http_server if hasattr(self.engine.config, "http_server") else {}
-            if not isinstance(http_cfg, dict):
-                http_cfg = {}
-
-            self._host = http_cfg.get("host", "0.0.0.0")
-            self._port = http_cfg.get("port", 8000)
-            api_keys = http_cfg.get("api_keys", [])
-            cors_origins = http_cfg.get("cors_origins", ["*"])
-
-            try:
-                self._server = HTTPServerAdapter(self.engine, host=self._host, port=self._port)
-            except ImportError as e:
-                self._error = f"依赖缺失: {e}"
-                self.logger.error(f"启动 HTTP 服务器失败 - {self._error}")
-                self._running = False
-                return
-            except Exception as e:
-                self._error = str(e)
-                self.logger.error(f"启动 HTTP 服务器失败: {e}")
-                self._running = False
-                return
-
-            self._server_thread = self._server.start_in_thread()
+            thread = self.start_in_thread()
 
             import time
             for _ in range(20):
                 time.sleep(0.1)
-                if not self._server_thread.is_alive():
-                    adapter_error = self._server.get_error() if hasattr(self._server, 'get_error') else None
+                if not thread.is_alive():
+                    adapter_error = self.get_error()
                     if adapter_error:
-                        self._error = adapter_error
-                    else:
-                        self._error = "启动失败，线程已退出"
-                    self.logger.error(f"启动 HTTP 服务器失败: {self._error}")
+                        self.logger.error(f"启动 HTTP 服务器失败: {adapter_error}")
                     self._running = False
                     return
 
@@ -85,23 +83,21 @@ class HttpServer:
             self.logger.info(f"  地址: http://{self._host}:{self._port}")
             self.logger.info(f"  API 文档: http://{self._host}:{self._port}/docs")
             self.logger.info(f"  WebSocket: ws://{self._host}:{self._port}/ws")
-            if api_keys:
-                self.logger.info(f"  API Key 认证: 已启用 ({len(api_keys)} 个密钥)")
+            if self.api_keys:
+                self.logger.info(f"  API Key 认证: 已启用 ({len(self.api_keys)} 个密钥)")
             else:
                 self.logger.info(f"  API Key 认证: 未启用（开放访问）")
-            if cors_origins:
-                self.logger.info(f"  CORS 来源: {', '.join(cors_origins) if len(cors_origins) <= 3 else str(len(cors_origins)) + ' 个'}")
+            if self.cors_origins:
+                self.logger.info(
+                    f"  CORS 来源: {', '.join(self.cors_origins) if len(self.cors_origins) <= 3 else str(len(self.cors_origins)) + ' 个'}"
+                )
             self.logger.info("═══════════════════════════════════════")
 
-            while self._running and self._server_thread and self._server_thread.is_alive():
-                time.sleep(1)
+            while self._running and thread and thread.is_alive():
+                self._stop_event.wait(1)
 
             self.logger.info("HTTP 服务器主循环退出")
-        except ImportError as e:
-            self._error = str(e)
-            self.logger.error(f"启动 HTTP 服务器失败: {e}")
         except Exception as e:
-            self._error = str(e)
             self.logger.error(f"启动 HTTP 服务器失败: {e}")
         finally:
             self._running = False
@@ -110,14 +106,11 @@ class HttpServer:
     def stop(self) -> bool:
         """停止 HTTP 服务器"""
         self._running = False
-        if self._server:
-            try:
-                self._server.stop()
-                self._server = None
-                self._server_thread = None
-                self.logger.info("HTTP 服务器已停止")
-                return True
-            except Exception as e:
-                self.logger.error(f"停止 HTTP 服务器失败: {e}")
-                return False
-        return False
+        self._stop_event.set()
+        try:
+            super().stop()
+            self.logger.info("HTTP 服务器已停止")
+            return True
+        except Exception as e:
+            self.logger.error(f"停止 HTTP 服务器失败: {e}")
+            return False

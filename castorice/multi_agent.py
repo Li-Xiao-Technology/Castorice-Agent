@@ -110,11 +110,10 @@ class MultiAgentCoordinator:
             )
             self._tasks[task_id] = task
 
-        # 修复：不在持锁状态下调用 get_agents_by_role，避免死锁
-        if target_role:
-            agents = [a for a in self._agents.values() if a.role == target_role]
-            if agents:
-                with self._lock:
+            # 在持锁状态下完成查找目标角色 Agent 并分配任务，避免 TOCTOU 竞态
+            if target_role:
+                agents = [a for a in self._agents.values() if a.role == target_role]
+                if agents:
                     agent = min(agents, key=lambda a: a.task_count)
                     task.assigned_to = agent.agent_id
                     task.status = "in_progress"
@@ -288,11 +287,19 @@ class RoleBasedCoordinator:
 
 
 _multi_agent_coordinator = None
+_multi_agent_coordinator_lock = threading.Lock()
 
 
+
+def set_multi_agent_coordinator(instance: MultiAgentCoordinator) -> None:
+    """手动设置全局 MultiAgentCoordinator 实例（Agent 初始化时调用，确保配置生效）"""
+    global _multi_agent_coordinator
+    _multi_agent_coordinator = instance
 def get_multi_agent_coordinator() -> MultiAgentCoordinator:
     """获取全局多 Agent 协作协调器单例"""
     global _multi_agent_coordinator
     if _multi_agent_coordinator is None:
-        _multi_agent_coordinator = MultiAgentCoordinator()
+        with _multi_agent_coordinator_lock:
+            if _multi_agent_coordinator is None:
+                _multi_agent_coordinator = MultiAgentCoordinator()
     return _multi_agent_coordinator

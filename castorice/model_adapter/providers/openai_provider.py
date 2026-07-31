@@ -24,12 +24,31 @@ class OpenAIProvider:
                 "base_url": self.adapter.openrouter_cfg.get("base_url", "https://openrouter.ai/api/v1"),
                 "model": self.adapter.openrouter_cfg.get("model", "anthropic/claude-3.5-sonnet"),
             }
+        elif provider == "freellmapi":
+            return {
+                "api_key": self.adapter.freellmapi_cfg.get("api_key", ""),
+                "base_url": self.adapter.freellmapi_cfg.get("base_url", "http://127.0.0.1:31415/v1"),
+                "model": self.adapter.freellmapi_cfg.get("model", "auto"),
+            }
         return self.adapter.openai_cfg
 
     def chat(self, messages: List[ChatMessage]) -> ChatResponse:
         cfg = self._get_cfg()
         client = self.adapter._get_openai_client(cfg.get("base_url", ""), cfg.get("api_key", ""))
-        api_messages = [m.to_dict() for m in messages]
+        # P1-1: Provider 级 prompt caching
+        # 对标记为 cacheable 的消息（system 消息等）添加 cache_control
+        api_messages = []
+        for m in messages:
+            md = m.to_dict()
+            if getattr(m, "cacheable", False) and isinstance(md.get("content"), str):
+                md["content"] = [
+                    {
+                        "type": "text",
+                        "text": md["content"],
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ]
+            api_messages.append(md)
 
         response = client.chat.completions.create(
             model=cfg.get("model", "gpt-4o"),
@@ -51,7 +70,15 @@ class OpenAIProvider:
     def chat_stream(self, messages: List[ChatMessage]) -> Generator[str, None, None]:
         cfg = self._get_cfg()
         client = self.adapter._get_openai_client(cfg.get("base_url", ""), cfg.get("api_key", ""))
-        api_messages = [m.to_dict() for m in messages]
+        # P1-1: Provider 级 prompt caching
+        api_messages = []
+        for m in messages:
+            md = m.to_dict()
+            if getattr(m, "cacheable", False) and isinstance(md.get("content"), str):
+                md["content"] = [
+                    {"type": "text", "text": md["content"], "cache_control": {"type": "ephemeral"}}
+                ]
+            api_messages.append(md)
 
         try:
             stream = client.chat.completions.create(
@@ -91,7 +118,15 @@ class OpenAIProvider:
         cfg = self._get_cfg()
         client = self.adapter._get_openai_client(cfg.get("base_url", ""), cfg.get("api_key", ""))
 
-        api_messages = [m.to_dict() for m in messages]
+        # P1-1: Provider 级 prompt caching
+        api_messages = []
+        for m in messages:
+            md = m.to_dict()
+            if getattr(m, "cacheable", False) and isinstance(md.get("content"), str):
+                md["content"] = [
+                    {"type": "text", "text": md["content"], "cache_control": {"type": "ephemeral"}}
+                ]
+            api_messages.append(md)
 
         response = client.chat.completions.create(
             model=cfg.get("model", "gpt-4o"),

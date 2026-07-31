@@ -87,7 +87,12 @@ class EventBus:
 
         for queue in queues:
             try:
-                loop = asyncio.get_event_loop()
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+
                 if loop.is_running():
                     loop.call_soon_threadsafe(queue.put_nowait, event)
                 else:
@@ -166,6 +171,12 @@ class EventBus:
             except ValueError:
                 pass
 
+
+def set_event_bus(instance: EventBus) -> None:
+    """手动设置全局 EventBus 实例（Agent 初始化时调用，确保配置生效）"""
+    global _global_event_bus
+    with _global_bus_lock:
+        _global_event_bus = instance
     def get_stats(self) -> Dict[str, Any]:
         """获取事件总线统计信息"""
         with self._lock:

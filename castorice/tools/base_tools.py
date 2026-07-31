@@ -15,7 +15,12 @@ import subprocess
 import re
 from typing import Dict, Any, List, Optional, Union, get_type_hints, get_origin, get_args
 
+import httpx
+
 from castorice.http_client import get_http_client
+from castorice.logger import get_logger
+
+_logger = get_logger(__name__)
 
 
 def _get_httpx_client():
@@ -28,13 +33,31 @@ _SENSITIVE_FILE_PATTERNS = [
     ".pem", ".ppk", "privkey",
 ]
 
+_MAX_COMMAND_LENGTH = 4096
+_MAX_CODE_LENGTH = 16384
+_MAX_WRITE_CONTENT_LENGTH = 1048576  # 1 MB
+_MAX_READ_LINES = 10000
+
+
+def _default_allowed_paths() -> List[str]:
+    """默认允许的路径列表：工作目录 + castorice_data + ~/.castorice"""
+    import os as _os
+    paths = []
+    cwd = _os.getcwd()
+    paths.append(cwd)
+    castorice_data = _os.path.join(cwd, "castorice_data")
+    paths.append(castorice_data)
+    dot_castorice = _os.path.join(_os.path.expanduser("~"), ".castorice")
+    paths.append(dot_castorice)
+    return paths
+
 
 def _is_path_safe(file_path: str, allowed_paths: Optional[List[str]]) -> bool:
     """
-    检查文件路径是否安全
+    检查文件路径是否安全（白名单模式）
     - 阻止路径遍历攻击（../ 或 ..\）
     - 阻止读取敏感文件
-    - allowed_paths 为 None 或空列表时返回 True（向后兼容）
+    - 默认使用 _default_allowed_paths() 作为白名单
     - 检查绝对路径是否在 allowed_paths 的任一目录下
     """
     if not file_path or not isinstance(file_path, str):
@@ -60,8 +83,13 @@ def _is_path_safe(file_path: str, allowed_paths: Optional[List[str]]) -> bool:
     if ".ssh" in abs_path.lower().replace("\\", "/").split("/"):
         return False
 
+    # 禁止读取审计日志目录（防止 Agent 篡改/读取自身审计记录）
+    path_parts = abs_path.lower().replace("\\", "/").split("/")
+    if "audit_logs" in path_parts:
+        return False
+
     if allowed_paths is None or len(allowed_paths) == 0:
-        return True
+        allowed_paths = _default_allowed_paths()
 
     for allowed in allowed_paths:
         abs_allowed = os.path.abspath(allowed)
@@ -167,7 +195,7 @@ class Tool:
         try:
             hints = get_type_hints(self.func)
             sig = inspect.signature(self.func)
-        except Exception:
+        except (TypeError, ValueError):
             return self._minimal_schema()
 
         properties = {}
@@ -259,10 +287,51 @@ def register_tool(name: str, description: str, risk_level: str = "low"):
     return decorator
 
 
+def reload_tools():
+    """重新加载工具注册表（热更新）。
+
+    清空当前注册表并重新导入 base_tools / web_tools 模块代码，
+    触发 @register_tool 装饰器重新注册工具。
+    保持同一 _registered_tools dict 对象引用，确保其他模块持有的引用仍然有效。
+    """
+    import importlib
+    _registered_tools.clear()
+    # 重新导入 base_tools 以触发装饰器重新注册
+    import castorice.tools.base_tools as _bt
+    importlib.reload(_bt)
+    # reload 会创建新的 _registered_tools，需同步回当前 dict 以保持引用有效
+    _registered_tools.update(_bt._registered_tools)
+    # 重新导入 web_tools（外部信息检索工具）
+    try:
+        import castorice.tools.web_tools as _wt
+        importlib.reload(_wt)
+        _registered_tools.update(_wt._registered_tools)
+    except (ImportError, ModuleNotFoundError, AttributeError) as e:
+        _logger.warning(f"重新加载 web_tools 失败: {e}")
+    # 重新导入 eigenflux_tool（EigenFlux 网络工具）
+    try:
+        import castorice.tools.eigenflux_tool as _et
+        importlib.reload(_et)
+        _registered_tools.update(_et._registered_tools)
+    except (ImportError, ModuleNotFoundError, AttributeError) as e:
+        _logger.warning(f"重新加载 eigenflux_tool 失败: {e}")
+
+
 # ========== 1. 联网搜索 ==========
 @register_tool(
     name="web_search",
-    description="联网搜索信息。参数: query(必填,搜索关键词), max_results(可选,默认5)",
+    description=(
+        "联网搜索信息（基于 DuckDuckGo，无需 API Key）。\n"
+        "参数:\n"
+        "- query (必填, str): 搜索关键词，建议 2-5 个词\n"
+        "- max_results (可选, int, 默认 5): 返回结果数量，建议 3-10\n"
+        "适用场景：查新闻、查资料、查人物、查事件、查最新动态\n"
+        "不适用：查实时天气（用 get_weather）、查股价（用 stock_price）、查视频（用 youtube/bilibili 搜索）\n"
+        "Few-shot 示例：\n"
+        "  例1: query='2026年人工智能发展趋势' → 返回行业趋势文章\n"
+        "  例2: query='小米SU7发布会' max_results=3 → 限制返回3条\n"
+        "  例3: query='Python asyncio 教程' → 返回教程链接"
+    ),
 )
 def _web_search(query: str, max_results: int = 5) -> str:
     """使用 DuckDuckGo 搜索并返回结果摘要"""
@@ -286,7 +355,7 @@ def _web_search(query: str, max_results: int = 5) -> str:
             href = r.get("href", "") or r.get("url", "")
             lines.append(f"{i}. {title}\n   {snippet}\n   {href}")
         return "\n".join(lines)
-    except Exception as e:
+    except (httpx.HTTPError, ConnectionError, TimeoutError) as e:
         return f"搜索失败: {e}"
 
 
@@ -362,7 +431,17 @@ def _weather_zh(text: str) -> str:
 
 @register_tool(
     name="get_weather",
-    description="查询城市天气，支持实时天气和未来7天预报。参数: city(必填,城市名,如'大连'、'北京'), day(可选,第几天的预报,0=今天,1=明天,2=后天,最多7天)",
+    description=(
+        "查询城市实时天气和未来 7 天预报（基于 wttr.in 免费 API，无需 API Key）。\n"
+        "参数:\n"
+        "- city (必填, str): 城市名，支持中英文，如 '大连'、'北京'、'Shanghai'\n"
+        "- day (可选, int, 默认 0): 预报天数，0=今天实时天气，1=明天，2=后天...最多 7 天\n"
+        "返回内容包含：实时温度、体感温度、天气状况（中文）、湿度、风速、未来 7 天预报\n"
+        "Few-shot 示例：\n"
+        "  例1: city='大连' → 大连今天实时天气 + 未来 7 天\n"
+        "  例2: city='北京' day=1 → 北京明天天气预报\n"
+        "  例3: city='上海' day=3 → 上海 3 天后天气预报"
+    ),
 )
 def _get_weather(city: str, day: int = 0, lang: str = "zh") -> str:
     """
@@ -478,18 +557,32 @@ def _get_weather(city: str, day: int = 0, lang: str = "zh") -> str:
         )
 
         return result
-    except Exception as e:
+    except (httpx.HTTPError, ConnectionError, TimeoutError) as e:
         return f"天气查询失败: {e}"
 
 
 # ========== 2. 读文件 ==========
 @register_tool(
     name="read_file",
-    description="读取文本文件内容。参数: file_path(必填,文件路径), max_lines(可选,默认200), allowed_paths(可选,允许的目录白名单)",
+    description=(
+        "读取文本文件内容（自动 UTF-8 解码，失败时回退到 ignore）。\n"
+        "参数:\n"
+        "- file_path (必填, str): 文件绝对或相对路径\n"
+        "- max_lines (可选, int, 默认 200): 最多读取行数（超出截断）\n"
+        "- allowed_paths (可选, list[str]): 允许访问的目录白名单（受配置约束）\n"
+        "安全限制：自动阻止读取 .env、.ssh/id_rsa、.pem、id_dsa 等敏感文件\n"
+        "Few-shot 示例：\n"
+        "  例1: file_path='README.md' → 读取项目说明\n"
+        "  例2: file_path='src/main.py' max_lines=50 → 只读前 50 行\n"
+        "  例3: file_path='C:/Users/sheng/notes.txt' → 读取绝对路径"
+    ),
     risk_level="medium",  # P2-3: 读取文件内容属于中等风险
 )
+
 def _read_file(file_path: str, max_lines: int = 200, allowed_paths: Optional[List[str]] = None) -> str:
     try:
+        if max_lines > _MAX_READ_LINES:
+            return f"[BLOCKED] max_lines 超过上限 {_MAX_READ_LINES}"
         if not _is_path_safe(file_path, allowed_paths):
             return f"[BLOCKED] 文件路径不在白名单中或为敏感文件: {file_path}"
 
@@ -502,18 +595,31 @@ def _read_file(file_path: str, max_lines: int = 200, allowed_paths: Optional[Lis
         if len(lines) > max_lines:
             content = "\n".join(lines[:max_lines]) + f"\n... (截断,共 {len(lines)} 行)"
         return content
-    except Exception as e:
+    except (OSError, IOError, PermissionError) as e:
         return f"读取失败: {e}"
 
 
 # ========== 3. 写文件 ==========
 @register_tool(
     name="write_file",
-    description="将内容写入文件。参数: file_path(必填), content(必填,文本内容), allowed_paths(可选,允许的目录白名单)",
+    description=(
+        "将文本内容写入文件（覆盖或新建，UTF-8 编码）。\n"
+        "参数:\n"
+        "- file_path (必填, str): 目标文件路径\n"
+        "- content (必填, str): 要写入的文本内容\n"
+        "- allowed_paths (可选, list[str]): 允许写入的目录白名单\n"
+        "安全限制：自动阻止写入 .env、.ssh 等敏感路径；写入前会做内容审查（file_guard）\n"
+        "Few-shot 示例：\n"
+        "  例1: file_path='note.txt' content='Hello' → 写入文件\n"
+        "  例2: file_path='logs/output.log' content='日志内容' → 追加到日志\n"
+        "  例3: file_path='config.json' content='{\"key\": \"value\"}' → 写 JSON 配置"
+    ),
     risk_level="high",
 )
 def _write_file(file_path: str, content: str, allowed_paths: Optional[List[str]] = None) -> str:
     try:
+        if len(content) > _MAX_WRITE_CONTENT_LENGTH:
+            return f"[BLOCKED] 内容长度超过上限 {_MAX_WRITE_CONTENT_LENGTH} 字节"
         if not _is_path_safe(file_path, allowed_paths):
             return f"[BLOCKED] 文件路径不在白名单中或为敏感文件: {file_path}"
 
@@ -527,7 +633,7 @@ def _write_file(file_path: str, content: str, allowed_paths: Optional[List[str]]
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(content)
         return f"已写入 {len(content)} 字符到 {file_path}"
-    except Exception as e:
+    except (OSError, IOError, PermissionError) as e:
         return f"写入失败: {e}"
 
 
@@ -543,23 +649,95 @@ _TERMINAL_WHITELIST = {
     "tasklist",
 }
 
-_COMMAND_INJECTION_PATTERNS = [
-    ";", "|", "&&", "||", "$(", "`(", "`", "$", "\\(", "\\)",
-    "<", ">", ">>", "<<",
-    "&", "`", "$", "(", ")",
-]
+_QUOTED_STRIP_RE = re.compile(r'"[^"]*"|\'[^\']*\'')
+
+
+def _detect_command_injection(cmd: str) -> bool:
+    """
+    智能命令注入检测（分层检测，避免误拦合法命令）。
+
+    返回 True 表示检测到注入，False 表示安全。
+
+    检测层次（按优先级）：
+    L0: 换行符/回车符 — shell 解释为命令分隔符，无条件拦截
+    L1: 管道/重定向（|, >, <）— 无条件拦截（排除引号内）
+    L2: 命令替换 $(...) 和 ${...} — 全字符串检测（双引号内也生效）
+    L3: 反引号命令替换 `command` — 仅当反引号间有实际内容时拦截
+    L4: 命令链接（;, &, &&）— 仅当两侧都有命令词时拦截
+
+    合法放行示例：
+    - "echo $PATH" — 简单变量引用
+    - "echo hello; world" — 单侧分号，无链接命令
+    - "python -c \"print(1)\"" — 括号在引号内
+    """
+    stripped = cmd.strip()
+    if not stripped:
+        return False
+
+    # L0: 换行符/回车符 — shell 解释为命令分隔符，无条件拦截
+    if '\n' in stripped or '\r' in stripped:
+        return True
+
+    # L0: 剥离引号内容，避免误拦引号内的特殊字符
+    # 例如 echo "hello > world" → 剥离后只剩 echo
+    unquoted = _QUOTED_STRIP_RE.sub('', stripped)
+
+    # L1: 管道和重定向 — 无条件拦截（在非引号部分出现即为高风险）
+    if re.search(r'[|><]', unquoted):
+        return True
+
+    # L2: 命令替换模式 — 全字符串检测（双引号内也能执行替换）
+    # $(...) — 经典命令替换（如 echo "$(whoami)"）
+    if '$(' in stripped:
+        return True
+
+    # ${...} — 变量扩展可触发命令执行（如 echo "${cmd}"）
+    if '${' in stripped:
+        return True
+
+    # L3: 反引号命令替换 `command` — 仅当反引号对中有实际内容时拦截
+    # 单反引号（如 Markdown 代码片段）放行；`...` 有内容则拦截
+    if '`' in stripped:
+        if re.search(r'`[^`]+`', stripped):
+            return True
+
+    # L4: 命令链接运算符 — 仅当两侧都有命令词时拦截
+    # ; — 仅拦截 "cmd1; cmd2" 形式的链接；放行尾部/头部/独立的 ;
+    if re.search(r'\S+\s*;\s*\S+', unquoted):
+        return True
+
+    # & 或 && — 仅拦截 "cmd1 & cmd2" 形式的链接
+    if re.search(r'\S+\s*&&?\s*\S+', unquoted):
+        return True
+
+    return False
 
 
 @register_tool(
     name="terminal",
-    description="执行 shell 命令(Windows/PowerShell/cmd)。参数: command(必填), timeout(可选,默认30秒)",
+    description=(
+        "执行 shell 命令（Windows/PowerShell/cmd，白名单安全限制）。\n"
+        "参数:\n"
+        "- command (必填, str): shell 命令字符串\n"
+        "- timeout (可选, int, 默认 30): 超时时间（秒）\n"
+        "安全限制：\n"
+        "  - 只能执行白名单内命令（ls/dir/cd/echo/python/git/curl/wget 等 49 个）\n"
+        "  - 阻止危险命令（format/del/rm/shutdown/mkfs/dd/chown 等）\n"
+        "  - 智能拦截命令注入（管道/重定向/命令替换/链接）\n"
+        "Few-shot 示例：\n"
+        "  例1: command='ls' → 列出当前目录\n"
+        "  例2: command='pip list' → 查看已安装包\n"
+        "  例3: command='git status' → 查看 git 状态"
+    ),
     risk_level="high",
 )
 def _terminal(command: str, timeout: int = 30) -> str:
-    """执行 shell 命令（白名单安全限制 + 命令注入防护）"""
+    """执行 shell 命令（白名单安全限制 + 智能命令注入防护）"""
     stripped = command.strip()
     if not stripped:
         return "[BLOCKED] 命令不能为空"
+    if len(stripped) > _MAX_COMMAND_LENGTH:
+        return f"[BLOCKED] 命令长度超过上限 {_MAX_COMMAND_LENGTH} 字节"
 
     from castorice.security.file_guard import get_file_guard
     guard = get_file_guard()
@@ -571,13 +749,97 @@ def _terminal(command: str, timeout: int = 30) -> str:
     cmd_prefix = cmd_parts[0].lower() if cmd_parts else ""
 
     if cmd_prefix not in _TERMINAL_WHITELIST:
-        print(f"[TERMINAL BLOCKED] 命令不在白名单中: {cmd_prefix}")
+        _logger.warning(f"TERMINAL BLOCKED: 命令不在白名单中: {cmd_prefix}")
         return f"[BLOCKED] 命令不在白名单中: {cmd_prefix}"
 
-    for pattern in _COMMAND_INJECTION_PATTERNS:
-        if pattern in stripped:
-            print(f"[TERMINAL BLOCKED] 检测到命令注入: {pattern}")
-            return f"[BLOCKED] 检测到命令注入字符: {pattern}"
+    # 拦截可执行子代码命令和脚本文件执行，防止绕过沙盒执行任意代码
+    # 注意：pip/pip3 不在此列，因为 pip 的 -e 是 editable 安装参数（pip install -e .），非代码执行
+    _CODE_EXEC_PREFIXES = {"python", "python3", "node", "ruby", "perl"}
+    _CODE_EXEC_FLAGS = {"-c", "-e", "-m"}
+    _SCRIPT_EXTENSIONS = {".py", ".js", ".rb", ".pl", ".sh", ".bash"}
+    if cmd_prefix in _CODE_EXEC_PREFIXES:
+        # 检查是否有代码执行参数（-c/-e/-m）
+        for part in cmd_parts[1:]:
+            flag = part.split("=", 1)[0].lower()
+            if flag in _CODE_EXEC_FLAGS:
+                _logger.warning(
+                    f"TERMINAL BLOCKED: 检测到子代码执行参数 {flag}，"
+                    f"请使用 python_repl 工具: {stripped}"
+                )
+                return (
+                    f"[BLOCKED] 检测到子代码执行参数 {flag}，"
+                    f"禁止通过 {cmd_prefix} 直接执行代码，请使用 python_repl 工具"
+                )
+        # 检查是否直接执行脚本文件（防止 python script.py 绕过 AST 沙箱）
+        for part in cmd_parts[1:]:
+            if part.startswith("-"):
+                continue
+            lower_part = part.lower()
+            if any(lower_part.endswith(ext) for ext in _SCRIPT_EXTENSIONS):
+                _logger.warning(
+                    f"TERMINAL BLOCKED: 检测到脚本文件执行 {part}，"
+                    f"请使用 python_repl 工具: {stripped}"
+                )
+                return (
+                    f"[BLOCKED] 检测到脚本文件执行 {part}，"
+                    f"禁止通过 {cmd_prefix} 直接执行脚本，请使用 python_repl 工具"
+                )
+
+    # SSRF 防护：拦截 curl/wget 访问内部/私有网络地址
+    _NETWORK_CMDS = {"curl", "wget"}
+    if cmd_prefix in _NETWORK_CMDS:
+        try:
+            from .web_tools import _is_internal_url
+            url_candidates = []
+            for part in cmd_parts[1:]:
+                if part.startswith("-"):
+                    continue
+                if part.lower().startswith(("http://", "https://")):
+                    url_candidates.append(part)
+                elif "://" in part:
+                    url_candidates.append(part)
+            for url in url_candidates:
+                if _is_internal_url(url):
+                    _logger.warning(f"TERMINAL BLOCKED: {cmd_prefix} 访问内部地址被拦截: {url}")
+                    return f"[BLOCKED] SSRF 防护：禁止通过 {cmd_prefix} 访问内部/私有网络地址: {url}"
+        except (ImportError, ModuleNotFoundError, AttributeError) as _e:
+            _logger.warning(f"TERMINAL SSRF 检查异常，默认拦截: {_e}")
+            return f"[BLOCKED] SSRF 检查异常，已默认拦截: {_e}"
+
+    if _detect_command_injection(stripped):
+        _logger.warning(f"TERMINAL BLOCKED: 检测到命令注入: {stripped}")
+        return "[BLOCKED] 检测到命令注入"
+
+    # P1: 黑名单命令检查 —— 防止白名单内的命令配合换行符绕过后执行危险命令
+    cmd_lower = stripped.lower()
+    for bl_cmd in _DANGEROUS_COMMANDS_BLACKLIST:
+        if bl_cmd in cmd_parts or bl_cmd in cmd_lower.split():
+            _logger.warning(f"TERMINAL BLOCKED: 危险命令: {bl_cmd}")
+            return f"[BLOCKED] 危险命令被拦截: {bl_cmd}"
+
+    # P1: pip install 安全检查 —— 防止安装恶意包
+    if cmd_prefix in ("pip", "pip3") and len(cmd_parts) >= 2 and cmd_parts[1] == "install":
+        _logger.warning(f"TERMINAL BLOCKED: pip install 需要确认: {stripped}")
+        return (
+            "[BLOCKED] pip install 操作需要人工确认。"
+            "安装第三方包可能引入安全风险（恶意 setup.py），"
+            "请手动执行 pip install 命令。"
+        )
+
+    # P2: git clone SSRF 防护
+    if cmd_prefix == "git" and len(cmd_parts) >= 2 and cmd_parts[1] == "clone":
+        try:
+            from .web_tools import _is_internal_url
+            for part in cmd_parts[2:]:
+                if part.startswith("-"):
+                    continue
+                if part.lower().startswith(("http://", "https://", "git://")) or "://" in part:
+                    if _is_internal_url(part):
+                        _logger.warning(f"TERMINAL BLOCKED: git clone 访问内部地址: {part}")
+                        return f"[BLOCKED] SSRF 防护：禁止 git clone 内部/私有网络地址: {part}"
+                    break
+        except (ImportError, ModuleNotFoundError, AttributeError):
+            pass
 
     try:
         result = subprocess.run(
@@ -591,8 +853,72 @@ def _terminal(command: str, timeout: int = 30) -> str:
         return out if out else "(无输出)"
     except subprocess.TimeoutExpired:
         return f"[TIMEOUT] 命令执行超过 {timeout} 秒"
-    except Exception as e:
+    except (OSError, ValueError, RuntimeError) as e:
         return f"执行失败: {e}"
+
+
+# ========== 4.5 命令安全检查（公开 API） ==========
+# 注意：黑名单只保留命令首词，因为 cmd_prefix 仅取 cmd_parts[0]。
+# 多词命令（如 "taskkill /f"、"net stop"）永远不会被首词匹配，因此拆分为单词。
+_DANGEROUS_COMMANDS_BLACKLIST = {
+    # Windows 危险命令
+    "format", "del", "rd", "rmdir", "rm", "reg", "regedit",
+    "diskpart", "bcdedit", "cipher", "sfc",
+    # 系统控制
+    "shutdown", "restart", "logoff", "tsshutdown", "psshutdown",
+    "taskkill", "net",
+    # 文件破坏
+    "move", "ren", "rename", "copy", "xcopy", "robocopy",
+    "attrib", "takeown", "icacls",
+    # 网络危险
+    "netsh", "firewall", "route", "arp",
+    # Linux 危险命令
+    "mkfs", "dd", "fdisk", "parted", "mount", "umount",
+    "useradd", "userdel", "passwd", "chown", "chmod",
+    "iptables", "ip6tables", "tc",
+    # 其他 —— shell 解释器首词（含 -c / -e 等子代码执行参数）
+    "powershell", "cmd", "bash", "sh", "zsh", "ksh",
+}
+
+
+def is_command_safe(command: str) -> bool:
+    """
+    检查命令是否安全（公开 API，供测试和其他模块使用）
+
+    参数：
+        command: 待检查的命令
+
+    返回：True 表示安全，False 表示危险
+    """
+    if not command or not isinstance(command, str):
+        return False
+
+    stripped = command.strip()
+    if not stripped:
+        return False
+
+    # 提取命令前缀
+    cmd_parts = stripped.split()
+    if not cmd_parts:
+        return False
+
+    cmd_prefix = cmd_parts[0].lower()
+    # 去掉路径前缀（如 C:\Windows\System32\format.exe -> format）
+    if "\\" in cmd_prefix or "/" in cmd_prefix:
+        cmd_prefix = cmd_prefix.replace("\\", "/").split("/")[-1]
+    # 去掉 .exe 后缀
+    if cmd_prefix.endswith(".exe"):
+        cmd_prefix = cmd_prefix[:-4]
+
+    # 检查黑名单
+    if cmd_prefix in _DANGEROUS_COMMANDS_BLACKLIST:
+        return False
+
+    # 检查命令注入
+    if _detect_command_injection(stripped):
+        return False
+
+    return True
 
 
 # ========== 5. Python REPL ==========
@@ -616,7 +942,6 @@ _SAFE_BUILTINS = {
     "zip": zip,
     "map": map,
     "filter": filter,
-    "type": type,
     "isinstance": isinstance,
     "bool": bool,
     "set": set,
@@ -651,14 +976,17 @@ _SAFE_BUILTINS = {
 
 _DANGEROUS_PATTERNS = [
     "__import__", "__subclasses__", "__bases__", "__globals__", "__code__",
+    "__class__", "__base__", "__mro__", "__dict__", "__getattribute__",
     "open(", "exec(", "eval(", "compile(", "subprocess", "os.", "sys.",
     "socket.", "urllib.", "http.", "requests.", "shutil.", "pathlib.",
+    "getattr(", "globals(", "locals(", "vars(",
+    "itertools.count", "itertools.cycle",
 ]
 
 
 def _is_code_safe_ast(code: str) -> tuple:
     """
-    AST 级安全扫描：检测危险名称、属性、import 语句。
+    AST 级安全扫描：检测危险名称、属性、import 语句、getattr 调用、无限循环。
     可防御字符串拼接绕过（如 "ope" + "n("）。
     """
     import ast
@@ -669,9 +997,12 @@ def _is_code_safe_ast(code: str) -> tuple:
 
     dangerous_names = {
         "__import__", "__subclasses__", "__bases__", "__globals__",
-        "__code__", "open", "exec", "eval", "compile", "subprocess",
+        "__code__", "__class__", "__base__", "__mro__", "__dict__",
+        "__getattribute__",
+        "open", "exec", "eval", "compile", "subprocess",
         "os", "sys", "socket", "urllib", "http", "requests", "shutil",
         "pathlib", "importlib", "builtins", "__builtins__",
+        "getattr", "globals", "locals", "vars", "type",
     }
 
     for node in ast.walk(tree):
@@ -683,13 +1014,43 @@ def _is_code_safe_ast(code: str) -> tuple:
         if isinstance(node, ast.Attribute):
             if node.attr in dangerous_names:
                 return False, f"检测到危险属性: {node.attr}"
+        # 检测 getattr() 调用 —— 可用于沙盒逃逸
+        if isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Name) and func.id == "getattr":
+                return False, "检测到 getattr 调用，禁止使用"
+            if isinstance(func, ast.Name) and func.id == "type" and len(node.args) >= 3:
+                return False, "检测到 type() 三参数形式（动态创建类），禁止使用"
+        # 检测 while True / while 1 无限循环
+        if isinstance(node, ast.While):
+            test = node.test
+            if isinstance(test, ast.Constant) and test.value is True:
+                return False, "检测到 while True 无限循环"
+            if isinstance(test, ast.Constant) and isinstance(test.value, int) and test.value != 0:
+                return False, "检测到 while <非零常量> 无限循环"
+            if isinstance(test, ast.Name) and test.id == "True":
+                return False, "检测到 while True 无限循环"
 
     return True, ""
 
 
 @register_tool(
     name="python_repl",
-    description="执行 Python 代码片段(安全受限沙箱,无文件系统和网络访问)。参数: code(必填,Python 代码)",
+    description=(
+        "执行 Python 代码片段（受限沙箱环境，48 个安全内置函数）。\n"
+        "参数:\n"
+        "- code (必填, str): Python 代码字符串\n"
+        "- timeout (可选, int, 默认 30): 超时时间（秒）\n"
+        "安全限制：\n"
+        "  - 禁止 import 语句、__import__、open、exec、eval、compile、subprocess 等\n"
+        "  - 禁止访问 os、sys、socket、shutil、pathlib 等系统模块\n"
+        "  - 双层防护：字符串模式匹配 + AST 语法树扫描\n"
+        "可用内置：print/len/range/str/int/list/dict/sum/min/max/sorted/enumerate/zip 等\n"
+        "Few-shot 示例：\n"
+        "  例1: code='print(sum(range(10)))' → 输出 45\n"
+        "  例2: code='x = [1,2,3]; print(sum(x), len(x))' → 输出 6 3\n"
+        "  例3: code='result = sorted([3,1,2]); print(result)' → 输出 [1, 2, 3]"
+    ),
     risk_level="medium",
 )
 def _python_repl(code: str, timeout: int = 30) -> str:
@@ -701,7 +1062,10 @@ def _python_repl(code: str, timeout: int = 30) -> str:
     - 无 __import__、open、exec、eval 等危险函数
     - 保留 stdout 重定向捕获输出功能
     - 双层防护：字符串模式匹配 + AST 语法树扫描
+    - 软超时：通过 threading.Timer 检测超时（无法中断已运行的 exec）
     """
+    if len(code) > _MAX_CODE_LENGTH:
+        return f"[BLOCKED] 代码长度超过上限 {_MAX_CODE_LENGTH} 字节"
     code_lower = code.lower()
     for pattern in _DANGEROUS_PATTERNS:
         if pattern in code_lower:
@@ -711,30 +1075,77 @@ def _python_repl(code: str, timeout: int = 30) -> str:
     if not safe_ast:
         return f"[安全拦截] {ast_reason}"
 
+    # P0: 集成自我保护系统 — 检测自我毁灭代码
+    try:
+        from castorice.security.self_protection import SelfProtectionSystem
+        sp = SelfProtectionSystem()
+        if sp.detect_self_destruction(code):
+            return "[安全拦截] 自我保护系统检测到自我毁灭倾向，已拦截"
+    except (OSError, ImportError, RuntimeError) as e:
+        _logger.warning(f"自我保护系统不可用: {e}")
+
     try:
         import sys
+        import threading
         from io import StringIO
+
         old_stdout = sys.stdout
         sys.stdout = StringIO()
+
+        # 软超时检测：threading.Timer 无法真正中断 exec，但可记录超时状态
+        # 配合 AST 层对 while True 的拦截，可防止绝大多数无限循环
+        timed_out = False
+
+        def _timeout_handler():
+            nonlocal timed_out
+            timed_out = True
+
+        timer = threading.Timer(timeout, _timeout_handler)
+        timer.start()
         try:
             safe_globals = {"__builtins__": _SAFE_BUILTINS}
             exec(code, safe_globals, {})
         finally:
+            timer.cancel()
             output = sys.stdout.getvalue()
             sys.stdout = old_stdout
+
+        if timed_out:
+            return f"Error: 代码执行超过 {timeout} 秒（软超时）"
         return output if output else "(无输出)"
-    except Exception as e:
+    except (OSError, ValueError, RuntimeError) as e:
+        # 恢复 stdout（异常路径）
+        try:
+            sys.stdout = old_stdout
+        except Exception:
+            pass
         return f"执行出错: {type(e).__name__}: {e}"
 
 
 # ========== 6. 文档读取（PDF/DOCX/XLSX） ==========
 @register_tool(
     name="read_document",
-    description="读取 PDF/Word/Excel 文档内容。参数: file_path(必填,文档路径)",
+    description=(
+        "读取 PDF/Word/Excel 文档内容（自动识别扩展名）。\n"
+        "参数:\n"
+        "- file_path (必填, str): 文档绝对路径，支持 .pdf/.docx/.xlsx\n"
+        "- allowed_paths (可选, list[str]): 允许访问的目录白名单\n"
+        "支持格式：\n"
+        "  - .pdf: 使用 pypdf 提取文本（最多 5000 字符）\n"
+        "  - .docx: 使用 python-docx 读取段落（最多 5000 字符）\n"
+        "  - .xlsx: 使用 openpyxl 读取工作表（最多 5000 字符）\n"
+        "  - 其他: 尝试用 read_file 读取（按文本文件处理）\n"
+        "Few-shot 示例：\n"
+        "  例1: file_path='report.pdf' → 提取 PDF 文本\n"
+        "  例2: file_path='contract.docx' → 读取 Word 文档\n"
+        "  例3: file_path='sales_data.xlsx' → 读取 Excel 表格"
+    ),
     risk_level="medium",
 )
-def _read_document(file_path: str) -> str:
+def _read_document(file_path: str, allowed_paths: Optional[List[str]] = None) -> str:
     """读取 PDF/Word/Excel 文档"""
+    if not _is_path_safe(file_path, allowed_paths):
+        return f"[BLOCKED] 文件路径不在白名单中或为敏感文件: {file_path}"
     if not os.path.exists(file_path):
         return f"文件不存在: {file_path}"
     ext = os.path.splitext(file_path)[1].lower()
@@ -756,15 +1167,21 @@ def _read_document(file_path: str) -> str:
                 for row in ws.iter_rows(values_only=True):
                     lines.append("\t".join(str(c) if c is not None else "" for c in row))
             return "\n".join(lines)[:5000]
-        return _read_file(file_path)
-    except Exception as e:
+        return _read_file(file_path, allowed_paths=allowed_paths)
+    except (OSError, IOError, PermissionError, ImportError, ModuleNotFoundError, ValueError, RuntimeError) as e:
         return f"文档读取失败: {e}"
 
 
 # ========== 7. 获取当前时间 ==========
 @register_tool(
     name="get_current_time",
-    description="获取当前日期和时间（包含时区信息）。无需参数。",
+    description=(
+        "获取当前日期和时间（包含时区信息）。\n"
+        "无需参数。\n"
+        "返回内容：UTC 时间、本地时间、星期、年份、月份、日期\n"
+        "Few-shot 示例：\n"
+        "  例1: 调用 → '当前时间（UTC）: 2026-07-22 09:30:00 UTC\\n当前时间（本地）: ...\\n星期: 周三'"
+    ),
 )
 def _get_current_time() -> str:
     """获取当前日期时间，支持多种格式输出"""
@@ -799,6 +1216,12 @@ def get_base_tools(config: Optional[Dict[str, Any]] = None) -> List[Tool]:
     except ImportError:
         pass
 
+    # 自动导入 eigenflux_tool 以注册 EigenFlux 网络工具
+    try:
+        from . import eigenflux_tool  # noqa: F401
+    except ImportError:
+        pass
+
     allowed_paths = None
     if config:
         tools_cfg = config.get("tools", {})
@@ -822,7 +1245,8 @@ def get_base_tools(config: Optional[Dict[str, Any]] = None) -> List[Tool]:
                     "vrchat_search", "vrchat_popular_worlds",
                     "vrchat_user_status", "vrchat_world_info",
                     "generate_image", "analyze_image", "extract_text_from_image",
-                    "pixiv_search", "pixiv_popular", "pixiv_user_works"]:
+                    "pixiv_search", "pixiv_popular", "pixiv_user_works",
+                    "ef_feed"]:
             tool_cfg = tools_cfg.get(key, {})
             if isinstance(tool_cfg, dict):
                 tools_enabled[key] = tool_cfg.get("enabled", True)
@@ -876,7 +1300,18 @@ def get_base_tools(config: Optional[Dict[str, Any]] = None) -> List[Tool]:
         all_tools.append(_registered_tools["python_repl"])
 
     if is_enabled("read_document") and "read_document" in _registered_tools:
-        all_tools.append(_registered_tools["read_document"])
+        base_tool = _registered_tools["read_document"]
+        if allowed_paths is not None:
+            def _read_document_wrapper(file_path: str) -> str:
+                return base_tool.func(file_path, allowed_paths=allowed_paths)
+            all_tools.append(Tool(
+                name="read_document",
+                description=base_tool.description,
+                func=_read_document_wrapper,
+                risk_level=base_tool.risk_level,
+            ))
+        else:
+            all_tools.append(base_tool)
 
     # 外部信息检索工具
     for name in ["web_fetch", "wikipedia_search", "arxiv_search", "news_search",
@@ -888,6 +1323,11 @@ def get_base_tools(config: Optional[Dict[str, Any]] = None) -> List[Tool]:
                  "generate_image", "analyze_image", "extract_text_from_image",
                  "pixiv_search", "pixiv_popular", "pixiv_user_works"]:
         if is_enabled(name) and name in _registered_tools:
+            all_tools.append(_registered_tools[name])
+
+    # 所有 EigenFlux 工具（动态收集，ef_ 开头的全部启用）
+    for name in sorted(_registered_tools.keys()):
+        if name.startswith("ef_") and is_enabled(name):
             all_tools.append(_registered_tools[name])
 
     return all_tools

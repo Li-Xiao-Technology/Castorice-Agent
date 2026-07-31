@@ -23,12 +23,13 @@
 
 import json
 import logging
-import os
 import sqlite3
 import threading
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
+
+from castorice.storage import SqliteStorage
 
 logger = logging.getLogger("Castorice.Autobiographical")
 
@@ -106,7 +107,7 @@ class SignificantEvent:
             self.created_at = now
 
 
-class AutobiographicalMemory:
+class AutobiographicalMemory(SqliteStorage):
     """
     自传式记忆管理器
 
@@ -127,32 +128,13 @@ class AutobiographicalMemory:
         max_milestones: int = 50,
         max_events: int = 200,
     ):
-        self.db_path = db_path
+        super().__init__(db_path)
         self.max_milestones = max_milestones
         self.max_events = max_events
         self._lock = threading.Lock()
-        self._local = threading.local()
         self._total_interactions: int = 0
         self._init_db()
         self._load_stats()
-
-    def _get_conn(self):
-        if not hasattr(self._local, "conn"):
-            os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
-            conn = sqlite3.connect(self.db_path, timeout=30.0, check_same_thread=False)
-            conn.execute("PRAGMA journal_mode=WAL;")
-            conn.execute("PRAGMA synchronous=NORMAL;")
-            self._local.conn = conn
-        return self._local.conn
-
-    def close(self) -> None:
-        conn = getattr(self._local, "conn", None)
-        if conn is not None:
-            try:
-                conn.close()
-            except Exception:
-                pass
-            self._local.conn = None
 
     def _init_db(self):
         conn = self._get_conn()
@@ -345,6 +327,7 @@ class AutobiographicalMemory:
         """获取里程碑（按时间倒序）"""
         with self._lock:
             conn = self._get_conn()
+            conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             if category:
                 cursor.execute(
@@ -363,6 +346,7 @@ class AutobiographicalMemory:
         """获取当前时期"""
         with self._lock:
             conn = self._get_conn()
+            conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT * FROM epochs WHERE end_time IS NULL OR end_time = '' ORDER BY start_time DESC LIMIT 1"
@@ -574,6 +558,7 @@ class AutobiographicalMemory:
         """获取重要事件"""
         with self._lock:
             conn = self._get_conn()
+            conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             query = "SELECT * FROM events WHERE intensity >= ?"
             params = [min_intensity]
@@ -588,42 +573,42 @@ class AutobiographicalMemory:
 
     def _row_to_milestone(self, row) -> LifeMilestone:
         return LifeMilestone(
-            milestone_id=row[0],
-            title=row[1],
-            description=row[2] or "",
-            category=row[3],
-            importance=row[4],
-            timestamp=row[5],
-            session_id=row[6] or "",
-            related_experience_ids=json.loads(row[7] or "[]"),
-            created_at=row[8],
+            milestone_id=row["milestone_id"],
+            title=row["title"],
+            description=row["description"] or "",
+            category=row["category"],
+            importance=row["importance"],
+            timestamp=row["timestamp"],
+            session_id=row["session_id"] or "",
+            related_experience_ids=json.loads(row["related_experience_ids"] or "[]"),
+            created_at=row["created_at"],
         )
 
     def _row_to_epoch(self, row) -> LifeEpoch:
         return LifeEpoch(
-            epoch_id=row[0],
-            name=row[1],
-            description=row[2] or "",
-            start_time=row[3],
-            end_time=row[4] or "",
-            interaction_count=row[5],
-            key_themes=json.loads(row[6] or "[]"),
-            major_changes=json.loads(row[7] or "[]"),
-            created_at=row[8],
+            epoch_id=row["epoch_id"],
+            name=row["name"],
+            description=row["description"] or "",
+            start_time=row["start_time"],
+            end_time=row["end_time"] or "",
+            interaction_count=row["interaction_count"],
+            key_themes=json.loads(row["key_themes"] or "[]"),
+            major_changes=json.loads(row["major_changes"] or "[]"),
+            created_at=row["created_at"],
         )
 
     def _row_to_event(self, row) -> SignificantEvent:
         return SignificantEvent(
-            event_id=row[0],
-            title=row[1],
-            description=row[2] or "",
-            event_type=row[3],
-            intensity=row[4],
-            valence=row[5],
-            timestamp=row[6],
-            session_id=row[7] or "",
-            lesson_learned=row[8] or "",
-            created_at=row[9],
+            event_id=row["event_id"],
+            title=row["title"],
+            description=row["description"] or "",
+            event_type=row["event_type"],
+            intensity=row["intensity"],
+            valence=row["valence"],
+            timestamp=row["timestamp"],
+            session_id=row["session_id"] or "",
+            lesson_learned=row["lesson_learned"] or "",
+            created_at=row["created_at"],
         )
 
     def get_stats(self) -> Dict[str, Any]:

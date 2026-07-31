@@ -161,25 +161,40 @@ class SSEManager:
 
     def _broadcast(self, notification: Notification):
         """广播通知到所有 SSE 连接"""
+        # 先在锁内复制连接列表，然后释放锁，避免慢客户端阻塞其他订阅者
         with self._lock:
-            closed_connections = set()
-            for conn in self._connections:
-                try:
-                    data = notification.to_json()
-                    conn.write(f"data: {data}\n\n")
-                    conn.flush()
-                except Exception:
-                    closed_connections.add(conn)
+            conns = list(self._connections)
 
-            self._connections -= closed_connections
+        data = notification.to_json()
+        failed = []
+        for conn in conns:
+            try:
+                conn.write(f"data: {data}\n\n")
+                conn.flush()
+            except Exception:
+                failed.append(conn)
+
+        # 写入失败的连接需重新获取锁后移除
+        if failed:
+            with self._lock:
+                for conn in failed:
+                    self._connections.discard(conn)
 
 
 _notification_manager = None
+_notification_manager_lock = threading.Lock()
 
 
+
+def set_notification_manager(instance: NotificationManager) -> None:
+    """手动设置全局 NotificationManager 实例（Agent 初始化时调用，确保配置生效）"""
+    global _notification_manager
+    _notification_manager = instance
 def get_notification_manager() -> NotificationManager:
     """获取全局通知管理器单例"""
     global _notification_manager
     if _notification_manager is None:
-        _notification_manager = NotificationManager()
+        with _notification_manager_lock:
+            if _notification_manager is None:
+                _notification_manager = NotificationManager()
     return _notification_manager

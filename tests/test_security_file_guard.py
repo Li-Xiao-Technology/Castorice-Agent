@@ -65,12 +65,12 @@ def test_file_guard():
     assert allowed is False, "危险内容应被拦截"
     print("7. 危险内容拦截 - PASS")
 
-    # 8. 危险内容但写入记忆目录放行
+    # 8. 危险内容写入记忆目录也应拦截（安全加固：不再对记忆目录网开一面）
     allowed, reason = guard.check_write_allowed(
         os.path.join(tmpdir, "castorice_data", "note.md"), "import os"
     )
-    assert allowed is True, f"记忆目录危险内容应放行: {reason}"
-    print("8. 记忆目录危险内容放行 - PASS")
+    assert allowed is False, f"记忆目录危险内容也应拦截: {reason}"
+    print("8. 记忆目录危险内容拦截 - PASS")
 
     # 9. 危险命令拦截 - rm -rf /
     allowed, reason = guard.check_command_allowed("rm -rf /")

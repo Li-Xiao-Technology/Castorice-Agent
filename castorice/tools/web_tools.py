@@ -14,22 +14,129 @@
 - translate_text: 多语言翻译
 """
 
+import json
+import logging
 import re
+import ipaddress
+import socket
+import threading
 from typing import Dict, Any, List, Optional
+from urllib.parse import urlparse
 from .base_tools import register_tool
 from castorice.http_client import get_http_client as _get_httpx_client
 
-# ========== 网页内容抓取 ==========
+logger = logging.getLogger("Castorice.WebTools")
+
+
+def _http_get_json(url: str, timeout: int = 15, headers: Optional[Dict[str, str]] = None,
+                   params: Optional[Dict[str, Any]] = None) -> Any:
+    """
+    通用 HTTP GET + JSON 解析辅助函数，减少重复代码。
+
+    封装：获取 httpx client -> GET -> raise_for_status -> json()
+
+    :param url: 请求 URL
+    :param timeout: 超时时间（秒）
+    :param headers: 请求头
+    :param params: URL 参数
+    :return: 解析后的 JSON 数据
+    :raises: 任何 HTTP 或解析异常
+    """
+    client = _get_httpx_client()
+    resp = client.get(url, headers=headers, params=params, timeout=timeout)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _is_internal_ip(ip_str: str) -> bool:
+    """检查单个IP是否为内部/私有地址（含IPv4映射IPv6等多种编码）。
+
+    非IP字符串会抛出 ValueError，由调用方决定是否走DNS解析。
+    """
+    ip = ipaddress.ip_address(ip_str)
+    if ip.version == 6 and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    if ip.is_loopback or ip.is_private or ip.is_link_local:
+        return True
+    if ip.version == 4:
+        packed = ip.packed
+        if packed[0] == 0:
+            return True
+    if not ip.is_global:
+        return True
+    return False
+
+
+# DNS Rebinding 防护：已校验主机名 -> (解析时间戳, IP 集合) 缓存
+# TTL 60 秒，缩短 TOCTOU（Time-of-Check to Time-of-Use）攻击窗口
+_verified_ips: Dict[str, tuple] = {}
+_VERIFIED_IPS_TTL = 60.0
+_verified_ips_lock = threading.Lock()
+
+
+def _resolve_and_verify_host(hostname: str) -> bool:
+    """
+    解析主机名并校验所有解析到的 IP 是否均为外网地址。
+
+    DNS Rebinding 缓解：解析结果写入 _verified_ips 缓存 (TTL 60s)，
+    在 TTL 内复用同一组 IP，避免每次请求都重新走 DNS 而被攻击者
+    在校验与请求之间切换解析结果。
+
+    :return: True 表示命中内网/私有地址或解析失败（应拒绝）；False 表示全部为外网
+    """
+    import time
+    now = time.time()
+    with _verified_ips_lock:
+        entry = _verified_ips.get(hostname)
+        if entry and now - entry[0] < _VERIFIED_IPS_TTL:
+            cached_ips = entry[1]
+            for ip_str in cached_ips:
+                if _is_internal_ip(ip_str):
+                    return True
+            return False
+
+    try:
+        addr_infos = socket.getaddrinfo(hostname, None)
+    except socket.gaierror:
+        return True
+
+    resolved_ips = set()
+    for _family, _type, _proto, _canon, sockaddr in addr_infos:
+        resolved_ips.add(sockaddr[0])
+
+    with _verified_ips_lock:
+        _verified_ips[hostname] = (now, resolved_ips)
+
+    for ip_str in resolved_ips:
+        if _is_internal_ip(ip_str):
+            return True
+    return False
+
+
+def _is_internal_url(url: str) -> bool:
+    """
+    检查URL是否指向内部/私有网络地址 (SSRF防护 + DNS Rebinding防护)
+    """
+    try:
+        parsed = urlparse(url)
+        hostname = parsed.hostname
+        if not hostname:
+            return False
+        if hostname in ('localhost', '127.0.0.1', '0.0.0.0', '::1'):
+            return True
+        try:
+            return _is_internal_ip(hostname)
+        except ValueError:
+            return _resolve_and_verify_host(hostname)
+    except ValueError:
+        return True
+
 
 def _clean_html(html: str) -> str:
     """简单清理 HTML，提取正文文本"""
-    # 移除 script/style 标签及其内容
     html = re.sub(r'<(script|style)[^>]*>.*?</\1>', '', html, flags=re.IGNORECASE | re.DOTALL)
-    # 移除 HTML 标签
     html = re.sub(r'<[^>]+>', ' ', html)
-    # 合并空白
     html = re.sub(r'\s+', ' ', html)
-    # 解码常见 HTML 实体
     for pattern, repl in [('&nbsp;', ' '), ('&amp;', '&'), ('&lt;', '<'), ('&gt;', '>'), ('&quot;', '"')]:
         html = html.replace(pattern, repl)
     return html.strip()
@@ -40,13 +147,41 @@ def _clean_html(html: str) -> str:
     description="抓取网页正文内容。参数: url(必填,网页URL), max_length(可选,默认3000字符)",
 )
 def _web_fetch(url: str, max_length: int = 3000) -> str:
-    """抓取网页并提取正文文本"""
+    """抓取网页并提取正文文本（含 SSRF 重定向防护）"""
     if not url.startswith(('http://', 'https://')):
         return "URL 必须以 http:// 或 https:// 开头"
 
+    if _is_internal_url(url):
+        return "SSRF 防护：不允许访问内部/私有网络地址"
+
     try:
+        import httpx
         client = _get_httpx_client()
-        resp = client.get(url, follow_redirects=True, timeout=15)
+        current_url = url
+        max_redirects = 5
+        for _ in range(max_redirects + 1):
+            resp = client.get(current_url, follow_redirects=False, timeout=15)
+
+            if 300 <= resp.status_code < 400:
+                location = resp.headers.get('location')
+                if not location:
+                    return f"重定向响应缺少 Location 头 (HTTP {resp.status_code})"
+
+                if location.startswith('/'):
+                    from urllib.parse import urlsplit, urlunsplit
+                    parsed = urlsplit(current_url)
+                    location = urlunsplit((parsed.scheme, parsed.netloc, location, '', ''))
+
+                if _is_internal_url(location):
+                    return f"SSRF 防护：重定向目标为内部/私有网络地址: {location}"
+
+                current_url = location
+                continue
+
+            break
+        else:
+            return f"重定向次数超过上限 ({max_redirects})"
+
         resp.raise_for_status()
 
         content_type = resp.headers.get('content-type', '')
@@ -60,7 +195,7 @@ def _web_fetch(url: str, max_length: int = 3000) -> str:
             text = text[:max_length] + f"\n... (截断,共 {len(text)} 字符)"
 
         return text if text else "(未能提取正文内容)"
-    except Exception as e:
+    except (httpx.HTTPError, httpx.TimeoutException) as e:
         return f"网页抓取失败: {e}"
 
 
@@ -76,9 +211,9 @@ def _wikipedia_search(query: str, lang: str = "zh") -> str:
     - lang: zh(中文), en(英文), ja(日文) 等
     """
     try:
+        import httpx
         client = _get_httpx_client()
 
-        # 1. 搜索条目
         search_url = f"https://{lang}.wikipedia.org/w/api.php"
         search_params = {
             "action": "query",
@@ -94,7 +229,6 @@ def _wikipedia_search(query: str, lang: str = "zh") -> str:
         if not results:
             return f"未找到相关条目: {query}"
 
-        # 2. 获取第一个条目的摘要
         page_id = results[0]["pageid"]
         extract_url = f"https://{lang}.wikipedia.org/w/api.php"
         extract_params = {
@@ -116,12 +250,11 @@ def _wikipedia_search(query: str, lang: str = "zh") -> str:
         if not extract:
             return f"无法获取条目内容: {title}"
 
-        # 截断过长的内容
         if len(extract) > 1500:
             extract = extract[:1500] + "..."
 
         return f"【{title}】\n{extract}\n\n来源: https://{lang}.wikipedia.org/?curid={page_id}"
-    except Exception as e:
+    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError) as e:
         return f"维基百科查询失败: {e}"
 
 
@@ -137,21 +270,19 @@ def _arxiv_search(query: str, max_results: int = 5) -> str:
     - 使用 arXiv API (无需 API Key)
     """
     try:
+        import httpx
         import urllib.parse
         client = _get_httpx_client()
 
-        # arXiv API
         search_query = urllib.parse.quote(f"all:{query}")
         url = f"http://export.arxiv.org/api/query?search_query={search_query}&max_results={max_results}"
 
         resp = client.get(url, timeout=20)
         resp.raise_for_status()
 
-        # 解析 XML
         import xml.etree.ElementTree as ET
         root = ET.fromstring(resp.text)
 
-        # 命名空间
         ns = {'atom': 'http://www.w3.org/2005/Atom'}
 
         entries = root.findall('atom:entry', ns)
@@ -187,53 +318,144 @@ def _arxiv_search(query: str, max_results: int = 5) -> str:
             )
 
         return "\n\n".join(lines)
-    except Exception as e:
+    except (httpx.HTTPError, httpx.TimeoutException, ET.ParseError) as e:
         return f"arXiv 检索失败: {e}"
 
 
-# ========== 新闻聚合搜索 ==========
+# ========== 新闻聚合搜索（国内优先 + 海外 fallback）==========
 
-@register_tool(
-    name="news_search",
-    description="搜索实时新闻。参数: query(必填,新闻关键词), max_results(可选,默认5)",
-)
-def _news_search(query: str, max_results: int = 5) -> str:
-    """
-    使用 DuckDuckGo 新闻搜索
-    """
+def _news_search_cn_rss(max_results: int = 5) -> List[Dict[str, str]]:
+    """国内 RSS 新闻聚合（新浪科技 + 36氪，无需关键词）"""
+    import xml.etree.ElementTree as ET
+
+    sources = [
+        ("新浪科技", "https://rss.sina.com.cn/news/allnews/tech.xml"),
+        ("36氪", "https://36kr.com/feed"),
+    ]
+
+    client = _get_httpx_client()
+    all_items = []
+
+    for source_name, url in sources:
+        try:
+            resp = client.get(url, timeout=8, follow_redirects=True, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            })
+            if resp.status_code != 200:
+                continue
+            root = ET.fromstring(resp.text)
+            for item in root.findall(".//item"):
+                title = (item.findtext("title") or "").strip()
+                link = (item.findtext("link") or "").strip()
+                desc = (item.findtext("description") or "").strip()
+                pub_date = (item.findtext("pubDate") or "").strip()
+
+                if title:
+                    clean_desc = re.sub(r"<[^>]+>", "", desc)[:200]
+                    all_items.append({
+                        "title": title,
+                        "body": clean_desc,
+                        "url": link,
+                        "source": source_name,
+                        "date": pub_date,
+                    })
+        except Exception:
+            continue
+
+    return all_items[:max_results]
+
+
+def _news_search_ddgs(query: str, max_results: int = 5) -> List[Dict[str, str]]:
+    """DuckDuckGo 新闻搜索（fallback）"""
     try:
         from ddgs import DDGS
     except ImportError:
         try:
             from duckduckgo_search import DDGS
         except ImportError:
-            return "未安装搜索库，请执行: pip install ddgs"
+            return []
 
+    with DDGS() as ddgs:
+        raw = list(ddgs.news(query, max_results=max_results))
+
+    results = []
+    for r in raw:
+        body = r.get("body", "")
+        if len(body) > 200:
+            body = body[:200] + "..."
+        results.append({
+            "title": r.get("title", ""),
+            "body": body,
+            "url": r.get("url", ""),
+            "source": r.get("source", ""),
+            "date": r.get("date", ""),
+        })
+    return results
+
+
+@register_tool(
+    name="news_search",
+    description="搜索实时新闻（自动优先国内源）。参数: query(可选,新闻关键词，不填则返回国内头条), max_results(可选,默认5)",
+)
+def _news_search(query: str = "", max_results: int = 5) -> str:
+    """
+    混合新闻搜索：
+    1. 无关键词时 → 国内 RSS 聚合（新浪科技+36氪，速度快中文好）
+    2. 有关键词时 → web_search 搜关键词+新闻
+    3. 都失败时 fallback 到 DuckDuckGo news
+    """
+    errors = []
+    has_query = bool(query and query.strip())
+
+    # 方案 1：国内 RSS（无关键词时优先）
+    if not has_query:
+        try:
+            results = _news_search_cn_rss(max_results)
+            if results:
+                lines = []
+                for i, r in enumerate(results, 1):
+                    lines.append(
+                        f"{i}. {r['title']}\n"
+                        f"   来源: {r['source']} | {r['date']}\n"
+                        f"   {r['body']}\n"
+                        f"   {r['url']}"
+                    )
+                return "\n\n".join(lines)
+        except Exception as e:
+            errors.append(f"国内RSS: {e}")
+
+    # 方案 2：web_search 关键词搜索（有关键词或 RSS 无结果时）
     try:
-        with DDGS() as ddgs:
-            results = list(ddgs.news(query, max_results=max_results))
-
-        if not results:
-            return f"未找到相关新闻: {query}"
-
-        lines = []
-        for i, r in enumerate(results, 1):
-            title = r.get("title", "")
-            body = r.get("body", "")[:200] + "..." if len(r.get("body", "")) > 200 else r.get("body", "")
-            url = r.get("url", "")
-            source = r.get("source", "")
-            date = r.get("date", "")
-
-            lines.append(
-                f"{i}. {title}\n"
-                f"   来源: {source} | {date}\n"
-                f"   {body}\n"
-                f"   {url}"
-            )
-
-        return "\n\n".join(lines)
+        from castorice.tools.base_tools import _registered_tools
+        web_tool = _registered_tools.get("web_search")
+        if web_tool:
+            search_q = f"{query} 最新新闻" if has_query else "今日国内新闻头条"
+            result = web_tool.invoke({"query": search_q, "max_results": max_results})
+            if result and "未搜索到结果" not in result and "搜索失败" not in result:
+                return result
     except Exception as e:
-        return f"新闻搜索失败: {e}"
+        errors.append(f"web_search: {e}")
+
+    # 方案 3：DuckDuckGo news（fallback）
+    try:
+        ddg_query = query if has_query else "today news"
+        results = _news_search_ddgs(ddg_query, max_results)
+        if results:
+            lines = []
+            for i, r in enumerate(results, 1):
+                lines.append(
+                    f"{i}. {r['title']}\n"
+                    f"   来源: {r['source']} | {r['date']}\n"
+                    f"   {r['body']}\n"
+                    f"   {r['url']}"
+                )
+            return "\n\n".join(lines)
+    except Exception as e:
+        errors.append(f"DuckDuckGo: {e}")
+
+    if errors:
+        return f"新闻搜索失败（{'; '.join(errors)}）"
+    return f"未找到相关新闻: {query}"
 
 
 # ========== GitHub 仓库搜索 ==========
@@ -247,6 +469,7 @@ def _github_search(query: str, max_results: int = 5) -> str:
     使用 GitHub API 搜索仓库（无需认证，匿名访问有速率限制）
     """
     try:
+        import httpx
         import urllib.parse
         client = _get_httpx_client()
 
@@ -278,7 +501,7 @@ def _github_search(query: str, max_results: int = 5) -> str:
             )
 
         return "\n\n".join(lines)
-    except Exception as e:
+    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError) as e:
         return f"GitHub 搜索失败: {e}"
 
 
@@ -323,6 +546,8 @@ def _youtube_search(query: str, max_results: int = 5) -> str:
 
         return "\n\n".join(lines)
     except Exception as e:
+        import logging
+        logging.getLogger(__name__).exception("YouTube 搜索异常")
         return f"YouTube 搜索失败: {e}"
 
 
@@ -337,6 +562,7 @@ def _bilibili_search(query: str, max_results: int = 5) -> str:
     使用 Bilibili API 搜索视频（无需 API Key）
     """
     try:
+        import httpx
         import urllib.parse
         client = _get_httpx_client()
 
@@ -379,7 +605,7 @@ def _bilibili_search(query: str, max_results: int = 5) -> str:
             )
 
         return "\n\n".join(lines)
-    except Exception as e:
+    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError) as e:
         return f"Bilibili 搜索失败: {e}"
 
 
@@ -394,15 +620,13 @@ def _ip_info(target: str) -> str:
     使用 ip-api.com 查询 IP/域名信息（免费，无需 API Key）
     """
     try:
+        import httpx
         import urllib.parse
-        client = _get_httpx_client()
 
         encoded_target = urllib.parse.quote(target)
         url = f"http://ip-api.com/json/{encoded_target}?lang=zh-CN"
 
-        resp = client.get(url, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
+        data = _http_get_json(url, timeout=10)
 
         if data.get("status") != "success":
             return f"查询失败: {data.get('message', '未知错误')}"
@@ -419,7 +643,7 @@ def _ip_info(target: str) -> str:
         info.append(f"时区: {data.get('timezone', '')}")
 
         return "\n".join(info)
-    except Exception as e:
+    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError) as e:
         return f"IP 查询失败: {e}"
 
 
@@ -434,6 +658,7 @@ def _stock_price(symbol: str) -> str:
     使用 Yahoo Finance 查询股票价格（免费，无需 API Key）
     """
     try:
+        import httpx
         import urllib.parse
         client = _get_httpx_client()
 
@@ -465,7 +690,7 @@ def _stock_price(symbol: str) -> str:
             info.append(f"涨跌幅: {change} ({change_percent:.2f}%)")
 
         return "\n".join(info)
-    except Exception as e:
+    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError) as e:
         return f"股票查询失败: {e}"
 
 
@@ -480,6 +705,7 @@ def _translate_text(text: str, target_lang: str = "zh", source_lang: str = "auto
     使用 Google 翻译 API（免费，无需 API Key）
     """
     try:
+        import httpx
         import urllib.parse
         client = _get_httpx_client()
 
@@ -502,7 +728,7 @@ def _translate_text(text: str, target_lang: str = "zh", source_lang: str = "auto
             return "\n".join(translations)
 
         return f"翻译失败: 无法解析响应"
-    except Exception as e:
+    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError) as e:
         return f"翻译失败: {e}"
 
 
@@ -519,9 +745,9 @@ def _anime_search(query: str, type: str = "ANIME", max_results: int = 5) -> str:
     - 官方 API，稳定可靠
     """
     try:
+        import httpx
         client = _get_httpx_client()
 
-        # AniList GraphQL API
         graphql_query = '''
         query ($search: String, $type: MediaType, $perPage: Int) {
             Page(page: 1, perPage: $perPage) {
@@ -583,7 +809,6 @@ def _anime_search(query: str, type: str = "ANIME", max_results: int = 5) -> str:
                 synopsis = synopsis[:200] + "..."
             url = item.get("siteUrl", "")
 
-            # 获取封面图
             cover_image = item.get("coverImage", {})
             image_url = cover_image.get("medium", "") if cover_image else ""
 
@@ -599,7 +824,6 @@ def _anime_search(query: str, type: str = "ANIME", max_results: int = 5) -> str:
                 "CANCELLED": "已取消"
             }
 
-            # 输出包含图片链接（Markdown 格式）
             line_parts = [
                 f"标题: {title}",
                 (f"日文名: {title_jp}" if title_jp and title_jp != title else None),
@@ -611,14 +835,13 @@ def _anime_search(query: str, type: str = "ANIME", max_results: int = 5) -> str:
                 (f"简介: {synopsis}" if synopsis else None),
                 f"链接: {url}",
             ]
-            # 添加图片（Markdown 格式，QQ 机器人可识别）
             if image_url:
                 line_parts.append(f"封面: ![封面]({image_url})")
 
             lines.append("\n".join([p for p in line_parts if p]))
 
         return "\n\n".join(lines)
-    except Exception as e:
+    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError) as e:
         return f"动漫搜索失败: {e}"
 
 
@@ -631,10 +854,10 @@ def _anime_season(year: str = "", season: str = "") -> str:
     使用 AniList GraphQL API 查询当季新番
     """
     try:
+        import httpx
         from datetime import datetime, timezone
         client = _get_httpx_client()
 
-        # 如果没有指定年份和季度，使用当前时间计算
         if not year or not season:
             now = datetime.now(timezone.utc).astimezone()
             year = year or str(now.year)
@@ -709,15 +932,15 @@ def _anime_season(year: str = "", season: str = "") -> str:
         season_cn = {"WINTER": "冬季", "SPRING": "春季", "SUMMER": "夏季", "FALL": "秋季"}
         header = f"【{year}年 {season_cn.get(season.upper(), season)} 新番】\n\n"
         return header + "\n\n".join(lines)
-    except Exception as e:
+    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError, ValueError) as e:
         return f"季度动漫查询失败: {e}"
 
 
 # ========== VRChat 工具 ==========
 
-# VRChat 认证缓存
 _vrchat_auth_client = None
 _vrchat_auth_expires = 0
+_vrchat_auth_lock = threading.Lock()
 
 
 def _get_vrchat_client() -> Optional[Any]:
@@ -725,90 +948,87 @@ def _get_vrchat_client() -> Optional[Any]:
     global _vrchat_auth_client, _vrchat_auth_expires
 
     import time
-    # cookie 有效期 30 分钟
     if _vrchat_auth_client and time.time() < _vrchat_auth_expires:
         return _vrchat_auth_client
 
-    import os
-    username = os.environ.get("VRCHAT_USERNAME", "")
-    password = os.environ.get("VRCHAT_PASSWORD", "")
+    with _vrchat_auth_lock:
+        if _vrchat_auth_client and time.time() < _vrchat_auth_expires:
+            return _vrchat_auth_client
 
-    if not username or not password:
-        return None
+        import os
+        username = os.environ.get("VRCHAT_USERNAME", "")
+        password = os.environ.get("VRCHAT_PASSWORD", "")
 
-    try:
-        import httpx
-        # P0-4: 替换旧客户端前先关闭，避免 TCP 连接和 socket 泄漏
-        if _vrchat_auth_client is not None:
-            try:
-                _vrchat_auth_client.close()
-            except Exception:
-                pass
-            _vrchat_auth_client = None
+        if not username or not password:
+            return None
 
-        client = httpx.Client(
-            base_url="https://api.vrchat.cloud/api/1",
-            auth=(username, password),
-            headers={
-                "User-Agent": "CastoriceAgent/3.0",
-            },
-            timeout=15,
-            follow_redirects=True,
-        )
-
-        # 登录获取 cookie
-        resp = client.get("/auth/user")
-        if resp.status_code == 200:
-            _vrchat_auth_client = client
-            _vrchat_auth_expires = time.time() + 1800  # 30 分钟
-            return client
-        elif resp.status_code == 401:
-            data = resp.json()
-            error_msg = data.get("error", {}).get("message", "")
-            # 检查是否需要 2FA 验证或新设备验证
-            if "2FA" in error_msg or "two-factor" in error_msg.lower() or "otp" in error_msg.lower() or "new" in error_msg.lower() or "email" in error_msg.lower():
-                print(f"\n[VRChat] {error_msg}")
-                print("[VRChat] 验证码已发送至你的邮箱，请在控制台输入验证码")
-                # P1-14: 用 asyncio.to_thread 包装 input 避免阻塞事件循环
-                import asyncio
+        try:
+            import httpx
+            if _vrchat_auth_client is not None:
                 try:
-                    loop = asyncio.get_running_loop()
-                    otp_code = loop.run_in_executor(None, lambda: input("[VRChat] 请输入邮箱验证码: ").strip())
-                    otp_code = asyncio.run_coroutine_threadsafe(
-                        asyncio.wait_for(otp_code, timeout=120), loop
-                    ).result()
-                except RuntimeError:
-                    # 不在事件循环中，直接同步调用
-                    otp_code = input("[VRChat] 请输入邮箱验证码: ").strip()
-                if not otp_code:
-                    print("[VRChat] 未输入验证码，登录取消")
-                    client.close()
-                    return None
+                    _vrchat_auth_client.close()
+                except Exception:
+                    pass
+                _vrchat_auth_client = None
 
-                # 提交验证码
-                verify_resp = client.post(
-                    "/auth/twofactorauth/emailotp/verify",
-                    json={"code": otp_code}
-                )
-                if verify_resp.status_code == 200:
-                    print("[VRChat] 验证码验证成功！")
-                    _vrchat_auth_client = client
-                    _vrchat_auth_expires = time.time() + 1800
-                    return client
+            client = httpx.Client(
+                base_url="https://api.vrchat.cloud/api/1",
+                auth=(username, password),
+                headers={
+                    "User-Agent": "CastoriceAgent/3.0",
+                },
+                timeout=15,
+                follow_redirects=True,
+            )
+
+            resp = client.get("/auth/user")
+            if resp.status_code == 200:
+                _vrchat_auth_client = client
+                _vrchat_auth_expires = time.time() + 1800
+                return client
+            elif resp.status_code == 401:
+                data = resp.json()
+                error_msg = data.get("error", {}).get("message", "")
+                if "2FA" in error_msg or "two-factor" in error_msg.lower() or "otp" in error_msg.lower() or "new" in error_msg.lower() or "email" in error_msg.lower():
+                    print(f"\n[VRChat] {error_msg}")
+                    print("[VRChat] 验证码已发送至你的邮箱，请在控制台输入验证码")
+                    import asyncio
+                    try:
+                        loop = asyncio.get_running_loop()
+                        otp_code = loop.run_in_executor(None, lambda: input("[VRChat] 请输入邮箱验证码: ").strip())
+                        otp_code = asyncio.run_coroutine_threadsafe(
+                            asyncio.wait_for(otp_code, timeout=120), loop
+                        ).result()
+                    except RuntimeError:
+                        otp_code = input("[VRChat] 请输入邮箱验证码: ").strip()
+                    if not otp_code:
+                        logger.warning("[VRChat] 未输入验证码，登录取消")
+                        client.close()
+                        return None
+
+                    verify_resp = client.post(
+                        "/auth/twofactorauth/emailotp/verify",
+                        json={"code": otp_code}
+                    )
+                    if verify_resp.status_code == 200:
+                        logger.info("[VRChat] 验证码验证成功")
+                        _vrchat_auth_client = client
+                        _vrchat_auth_expires = time.time() + 1800
+                        return client
+                    else:
+                        logger.warning(f"[VRChat] 验证码验证失败: {verify_resp.text}")
+                        client.close()
+                        return None
                 else:
-                    print(f"[VRChat] 验证码验证失败: {verify_resp.text}")
+                    logger.warning(f"[VRChat] 认证失败: {error_msg}")
                     client.close()
                     return None
             else:
-                print(f"[VRChat] 认证失败: {error_msg}")
                 client.close()
                 return None
-        else:
-            client.close()
+        except (httpx.HTTPError, json.JSONDecodeError) as e:
+            logger.error(f"[VRChat] 登录异常: {e}")
             return None
-    except Exception as e:
-        print(f"[VRChat] 登录异常: {e}")
-        return None
 
 
 @register_tool(
@@ -818,14 +1038,14 @@ def _get_vrchat_client() -> Optional[Any]:
 def _vrchat_search(query: str, type: str = "world", max_results: int = 5) -> str:
     """
     使用 VRChat 官方 API 搜索世界或头像
-    需要 VRChat 账号认证（.env 中配置 VRCHAT_USERNAME 和 VRCHAT_PASSWORD）
     """
     try:
+        import httpx
+        import urllib.parse
         client = _get_vrchat_client()
         if not client:
             return "VRChat 认证失败：请在 .env 中配置 VRCHAT_USERNAME 和 VRCHAT_PASSWORD"
 
-        import urllib.parse
         encoded_query = urllib.parse.quote(query)
         resp = client.get(f"/search?query={encoded_query}&type={type}&n={max_results}")
         resp.raise_for_status()
@@ -847,8 +1067,7 @@ def _vrchat_search(query: str, type: str = "world", max_results: int = 5) -> str
             description = item.get("description", "")
             if description and len(description) > 150:
                 description = description[:150] + "..."
-            
-            # 获取图片
+
             image_url = item.get("thumbnailImageUrl", "") or item.get("imageUrl", "")
 
             line_parts = [
@@ -860,14 +1079,13 @@ def _vrchat_search(query: str, type: str = "world", max_results: int = 5) -> str
                 (f"简介: {description}" if description else None),
                 f"链接: https://vrchat.com/home/{type}/{id}",
             ]
-            # 添加图片（Markdown 格式，QQ 机器人可识别）
             if image_url:
                 line_parts.append(f"封面: ![封面]({image_url})")
 
             lines.append("\n".join([p for p in line_parts if p]))
 
         return "\n\n".join(lines)
-    except Exception as e:
+    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError) as e:
         return f"VRChat搜索失败: {e}"
 
 
@@ -880,6 +1098,7 @@ def _vrchat_popular_worlds(limit: int = 10) -> str:
     获取 VRChat 当前热门世界
     """
     try:
+        import httpx
         client = _get_vrchat_client()
         if not client:
             return "VRChat 认证失败：请在 .env 中配置 VRCHAT_USERNAME 和 VRCHAT_PASSWORD"
@@ -911,7 +1130,7 @@ def _vrchat_popular_worlds(limit: int = 10) -> str:
             )
 
         return "【VRChat 热门世界】\n\n" + "\n\n".join(lines)
-    except Exception as e:
+    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError) as e:
         return f"获取热门世界失败: {e}"
 
 
@@ -924,11 +1143,12 @@ def _vrchat_user_status(username: str) -> str:
     查询 VRChat 用户在线状态和所在世界
     """
     try:
+        import httpx
+        import urllib.parse
         client = _get_vrchat_client()
         if not client:
             return "VRChat 认证失败：请在 .env 中配置 VRCHAT_USERNAME 和 VRCHAT_PASSWORD"
 
-        import urllib.parse
         encoded_name = urllib.parse.quote(username)
         resp = client.get(f"/users?search={encoded_name}")
         resp.raise_for_status()
@@ -949,8 +1169,7 @@ def _vrchat_user_status(username: str) -> str:
         bio = user.get("bio", "")
         if bio and len(bio) > 200:
             bio = bio[:200] + "..."
-        
-        # 获取用户头像
+
         user_image = user.get("currentAvatarImageUrl", "") or user.get("profilePicOverride", "")
         user_thumb = user.get("currentAvatarThumbnailImageUrl", "")
 
@@ -979,7 +1198,6 @@ def _vrchat_user_status(username: str) -> str:
             (f"加入时间: {joinDate}" if joinDate else None),
             (f"个人简介: {bio}" if bio else None),
         ]
-        # 添加头像图片（Markdown 格式）
         if user_thumb:
             result_parts.append(f"头像: ![头像]({user_thumb})")
         elif user_image:
@@ -988,7 +1206,7 @@ def _vrchat_user_status(username: str) -> str:
         result = "\n".join([p for p in result_parts if p])
 
         return result
-    except Exception as e:
+    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError) as e:
         return f"查询用户状态失败: {e}"
 
 
@@ -1001,6 +1219,7 @@ def _vrchat_world_info(world_id: str) -> str:
     获取 VRChat 世界详细信息
     """
     try:
+        import httpx
         client = _get_vrchat_client()
         if not client:
             return "VRChat 认证失败：请在 .env 中配置 VRCHAT_USERNAME 和 VRCHAT_PASSWORD"
@@ -1046,7 +1265,7 @@ def _vrchat_world_info(world_id: str) -> str:
         )
 
         return result
-    except Exception as e:
+    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError) as e:
         return f"获取世界信息失败: {e}"
 
 
@@ -1059,9 +1278,9 @@ def _vrchat_world_info(world_id: str) -> str:
 def _generate_image(prompt: str, width: int = 1024, height: int = 1024, seed: int = 0) -> str:
     """
     使用 Pollinations AI 免费生成图片
-    返回图片URL，可直接在浏览器或QQ中查看
     """
     try:
+        import httpx
         import urllib.parse
         import random
 
@@ -1071,7 +1290,6 @@ def _generate_image(prompt: str, width: int = 1024, height: int = 1024, seed: in
         encoded_prompt = urllib.parse.quote(prompt)
         image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width={width}&height={height}&seed={seed}&nologo=true"
 
-        # 验证图片可访问
         client = _get_httpx_client()
         resp = client.head(image_url, timeout=30, follow_redirects=True)
         if resp.status_code == 200:
@@ -1085,7 +1303,7 @@ def _generate_image(prompt: str, width: int = 1024, height: int = 1024, seed: in
             )
         else:
             return f"图片生成服务暂时不可用 (HTTP {resp.status_code})"
-    except Exception as e:
+    except (httpx.HTTPError, httpx.TimeoutException) as e:
         return f"图片生成失败: {e}"
 
 
@@ -1098,11 +1316,12 @@ def _generate_image(prompt: str, width: int = 1024, height: int = 1024, seed: in
 def _analyze_image(image_url: str) -> str:
     """
     使用多模态LLM分析图片内容
-    使用 Gemini API（免费可用）进行图片理解
     """
     try:
         import os
         import urllib.parse
+        import base64
+        from io import BytesIO
 
         gemini_api_key = os.environ.get("GEMINI_API_KEY", "")
         if not gemini_api_key:
@@ -1116,44 +1335,62 @@ GEMINI_API_KEY=your_api_key
         encoded_url = urllib.parse.quote(image_url)
         prompt = "请详细描述这张图片的内容，包括：\n1. 图片中的主要物体和场景\n2. 人物的表情和动作（如果有人物）\n3. 图片的整体氛围和风格\n4. 图片中包含的文字信息\n5. 任何值得注意的细节"
 
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro-vision:generateContent?key={gemini_api_key}"
-        
-        import base64
-        from io import BytesIO
-        
-        client = _get_httpx_client()
-        try:
-            resp = client.get(image_url, timeout=30)
-            resp.raise_for_status()
-            image_data = base64.b64encode(resp.content).decode('utf-8')
-            
-            payload = {
-                "contents": [{
-                    "parts": [
-                        {"text": prompt},
-                        {"inline_data": {"mime_type": resp.headers.get('content-type', 'image/jpeg'), "data": image_data}}
-                    ]
-                }]
-            }
-            
-            response = client.post(url, json=payload, timeout=60)
-            response.raise_for_status()
-            result = response.json()
-            
-            if "candidates" in result and result["candidates"]:
-                text_parts = []
-                for part in result["candidates"][0].get("content", {}).get("parts", []):
-                    if "text" in part:
-                        text_parts.append(part["text"])
-                if text_parts:
-                    return "\n\n".join(text_parts)
-                return "图片分析返回结果为空"
-            else:
-                return f"图片分析失败: {result.get('error', {}).get('message', '未知错误')}"
-                
-        except Exception as e:
-            return f"图片分析失败: {e}"
+        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro-vision:generateContent"
+        headers = {"x-goog-api-key": gemini_api_key}
 
+        import httpx
+        client = _get_httpx_client()
+
+        if _is_internal_url(image_url):
+            return "SSRF 防护：不允许下载内部/私有网络地址的图片"
+
+        MAX_IMAGE_SIZE = 20 * 1024 * 1024
+        with client.stream("GET", image_url, timeout=30, follow_redirects=False) as resp:
+            resp.raise_for_status()
+            content_length = resp.headers.get("content-length")
+            if content_length:
+                try:
+                    if int(content_length) > MAX_IMAGE_SIZE:
+                        return f"图片过大（声明 {content_length} 字节），超过 20MB 上限，已拒绝下载"
+                except ValueError:
+                    pass
+            content_type = resp.headers.get('content-type', 'image/jpeg')
+            chunks = []
+            total = 0
+            for chunk in resp.iter_bytes():
+                total += len(chunk)
+                if total > MAX_IMAGE_SIZE:
+                    return "图片过大，下载过程中超过 20MB 上限，已拒绝下载"
+                chunks.append(chunk)
+            image_content = b"".join(chunks)
+        image_data = base64.b64encode(image_content).decode('utf-8')
+
+        payload = {
+            "contents": [{
+                "parts": [
+                    {"text": prompt},
+                    {"inline_data": {"mime_type": content_type, "data": image_data}}
+                ]
+            }]
+        }
+
+        response = client.post(url, json=payload, headers=headers, timeout=60)
+        response.raise_for_status()
+        result = response.json()
+
+        if "candidates" in result and result["candidates"]:
+            text_parts = []
+            for part in result["candidates"][0].get("content", {}).get("parts", []):
+                if "text" in part:
+                    text_parts.append(part["text"])
+            if text_parts:
+                return "\n\n".join(text_parts)
+            return "图片分析返回结果为空"
+        else:
+            return f"图片分析失败: {result.get('error', {}).get('message', '未知错误')}"
+
+    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError, ValueError) as e:
+        return f"图片分析失败: {e}"
     except ImportError:
         return "图片分析需要 httpx 库，请安装: pip install httpx"
 
@@ -1166,11 +1403,17 @@ def _extract_text_from_image(image_url: str) -> str:
     """
     使用免费OCR服务提取图片中的文字
     """
+    if _is_internal_url(image_url):
+        return "错误：不允许访问内部地址"
+
     try:
         import os
+        import httpx
         client = _get_httpx_client()
 
-        ocr_api_key = os.environ.get("OCR_SPACE_API_KEY", "K85276029688957")  # 默认使用免费公共key，可通过环境变量覆盖
+        ocr_api_key = os.environ.get("OCR_SPACE_API_KEY", "")
+        if not ocr_api_key:
+            return "OCR 功能需要配置 OCR_SPACE_API_KEY 环境变量。\n获取方式: https://ocr.space/ocrapi"
 
         url = "https://api.ocr.space/parse/image"
         payload = {
@@ -1179,14 +1422,14 @@ def _extract_text_from_image(image_url: str) -> str:
             "language": "chs",
             "isOverlayRequired": "false",
         }
-        
+
         resp = client.post(url, data=payload, timeout=30)
         resp.raise_for_status()
         result = resp.json()
-        
+
         if result.get("IsErroredOnProcessing"):
             return f"OCR识别失败: {result.get('ErrorMessage', '未知错误')}"
-            
+
         if "ParsedResults" in result and result["ParsedResults"]:
             texts = []
             for item in result["ParsedResults"]:
@@ -1196,8 +1439,8 @@ def _extract_text_from_image(image_url: str) -> str:
             return "图片中未识别到文字"
         else:
             return "OCR识别返回结果为空"
-            
-    except Exception as e:
+
+    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError) as e:
         return f"OCR识别失败: {e}"
 
 
@@ -1210,9 +1453,9 @@ def _extract_text_from_image(image_url: str) -> str:
 def _pixiv_search(query: str, max_results: int = 10) -> str:
     """
     使用 Pixiv 公开 API 搜索插画
-    注意：Pixiv 对未登录访问有限制，部分功能可能受限
     """
     try:
+        import httpx
         import urllib.parse
         client = _get_httpx_client()
 
@@ -1258,7 +1501,6 @@ def _pixiv_search(query: str, max_results: int = 10) -> str:
             type_map = {0: "插画", 1: "漫画", 2: "动图"}
             type_cn = type_map.get(illust_type, "其他")
 
-            # 使用 pixiv.cat 代理获取可访问的图片
             image_url = f"https://pixiv.cat/{illust_id}.jpg" if illust_id else ""
 
             line_parts = [
@@ -1270,14 +1512,13 @@ def _pixiv_search(query: str, max_results: int = 10) -> str:
                 (f"标签: {', '.join(tags[:8])}" if tags else None),
                 f"链接: https://www.pixiv.net/artworks/{illust_id}",
             ]
-            # 添加预览图
             if image_url:
                 line_parts.append(f"预览: ![预览]({image_url})")
 
             lines.append("\n".join([p for p in line_parts if p]))
 
         return "\n\n".join(lines)
-    except Exception as e:
+    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError) as e:
         return f"Pixiv 搜索失败: {e}"
 
 
@@ -1288,17 +1529,15 @@ def _pixiv_search(query: str, max_results: int = 10) -> str:
 def _pixiv_popular(mode: str = "daily", max_results: int = 10) -> str:
     """
     使用 Pixiv 公开排行 API 获取热门插画
-    - mode: daily(日榜), weekly(周榜), monthly(月榜), male(男性向), female(女性向), rookie(新人), original(原创)
     """
     try:
+        import httpx
         client = _get_httpx_client()
 
-        # 支持的模式
         valid_modes = ["daily", "weekly", "monthly", "male", "female", "rookie", "original"]
         if mode not in valid_modes:
             return f"无效的排行模式: {mode}，支持的模式: {', '.join(valid_modes)}"
 
-        # Pixiv 排行 API（mode 映射）
         mode_param_map = {
             "daily": "daily",
             "weekly": "weekly",
@@ -1350,10 +1589,8 @@ def _pixiv_popular(mode: str = "daily", max_results: int = 10) -> str:
             type_map = {0: "插画", 1: "漫画", 2: "动图"}
             type_cn = type_map.get(illust_type, "其他")
 
-            # 使用 pixiv.cat 代理获取可访问的图片
             image_url = f"https://pixiv.cat/{illust_id}.jpg" if illust_id else ""
 
-            # 排名变化
             rank_change = ""
             if yes_rank and rank:
                 diff = yes_rank - rank
@@ -1371,14 +1608,13 @@ def _pixiv_popular(mode: str = "daily", max_results: int = 10) -> str:
                 (f"   标签: {', '.join(tags[:5])}" if tags else None),
                 f"   链接: https://www.pixiv.net/artworks/{illust_id}",
             ]
-            # 添加预览图
             if image_url:
                 line_parts.append(f"   预览: ![预览]({image_url})")
 
             lines.append("\n".join([p for p in line_parts if p]))
 
         return "\n\n".join(lines)
-    except Exception as e:
+    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError) as e:
         return f"获取 Pixiv 排行榜失败: {e}"
 
 
@@ -1391,6 +1627,7 @@ def _pixiv_user_works(user_id: str, max_results: int = 10) -> str:
     获取 Pixiv 用户的公开作品列表
     """
     try:
+        import httpx
         client = _get_httpx_client()
 
         url = f"https://www.pixiv.net/ajax/user/{user_id}/profile/all?lang=zh"
@@ -1417,18 +1654,15 @@ def _pixiv_user_works(user_id: str, max_results: int = 10) -> str:
         if not illusts and not mangas:
             return f"用户 {user_id} 没有公开作品，或用户不存在"
 
-        # 合并插画和漫画，按 ID 排序取最新的
         all_works = []
         for iid in illusts:
             all_works.append((iid, "illust"))
         for mid in mangas:
             all_works.append((mid, "manga"))
 
-        # 按 ID 降序排列（最新的在前）
         all_works.sort(key=lambda x: int(x[0]), reverse=True)
         all_works = all_works[:max_results]
 
-        # 获取每件作品的详细信息
         lines = [f"【Pixiv 用户 {user_id} 的作品（共 {len(illusts) + len(mangas)} 件）】\n"]
 
         for work_id, work_type in all_works:
@@ -1459,7 +1693,6 @@ def _pixiv_user_works(user_id: str, max_results: int = 10) -> str:
                 type_cn = type_map.get(illust_type, "其他")
                 work_type_cn = "漫画" if work_type == "manga" else type_cn
 
-                # 使用 pixiv.cat 代理获取可访问的图片
                 image_url = f"https://pixiv.cat/{work_id}.jpg"
 
                 line_parts = [
@@ -1472,17 +1705,16 @@ def _pixiv_user_works(user_id: str, max_results: int = 10) -> str:
                     (f"标签: {', '.join(tags[:8])}" if tags else None),
                     f"链接: https://www.pixiv.net/artworks/{work_id}",
                 ]
-                # 添加预览图
                 if image_url:
                     line_parts.append(f"预览: ![预览]({image_url})")
 
                 lines.append("\n".join([p for p in line_parts if p]))
-                lines.append("")  # 空行分隔
-            except Exception as e:
+                lines.append("")
+            except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError) as e:
                 lines.append(f"作品 {work_id}: 获取详情失败 ({e})")
 
         return "\n".join(lines)
-    except Exception as e:
+    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError) as e:
         return f"获取 Pixiv 用户作品失败: {e}"
 
 

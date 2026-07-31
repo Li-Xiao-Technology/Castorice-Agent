@@ -280,301 +280,424 @@ class ToolFactory:
         
         return tools
     
+    # ============================================================
+    # LangChain 工具工厂函数
+    # ============================================================
+    # 每个工厂均为无参静态方法，内部完成懒加载导入并返回适配后的 Tool 或
+    # List[Tool]。通过 _LANGCHAIN_TOOL_FACTORIES 注册表进行 名称 → 工厂 的
+    # 映射，由 _create_langchain_tool 统一分发，避免冗长的 if-elif 链。
+    # 实现一致的工具（如 weather / openweather）共享同一工厂以避免重复代码。
+
+    # ----- 知识搜索类 -----
+
+    @staticmethod
+    def _factory_wikipedia():
+        from langchain_community.tools import WikipediaQueryRun
+        from langchain_community.utilities import WikipediaAPIWrapper
+        api_wrapper = WikipediaAPIWrapper()
+        lc_tool = WikipediaQueryRun(api_wrapper=api_wrapper)
+        return LangChainToolAdapter(lc_tool).to_tool()
+
+    @staticmethod
+    def _factory_arxiv():
+        from langchain_community.tools import ArxivQueryRun
+        from langchain_community.utilities import ArxivAPIWrapper
+        api_wrapper = ArxivAPIWrapper()
+        lc_tool = ArxivQueryRun(api_wrapper=api_wrapper)
+        return LangChainToolAdapter(lc_tool).to_tool()
+
+    @staticmethod
+    def _factory_arxiv_papers():
+        from langchain_community.tools import ArxivQueryRun
+        from langchain_community.utilities import ArxivAPIWrapper
+        api_wrapper = ArxivAPIWrapper(top_k_results=5)
+        lc_tool = ArxivQueryRun(api_wrapper=api_wrapper)
+        return LangChainToolAdapter(lc_tool).to_tool()
+
+    @staticmethod
+    def _factory_pubmed():
+        from langchain_community.tools import PubMedQueryRun
+        from langchain_community.utilities import PubMedAPIWrapper
+        api_wrapper = PubMedAPIWrapper()
+        lc_tool = PubMedQueryRun(api_wrapper=api_wrapper)
+        return LangChainToolAdapter(lc_tool).to_tool()
+
+    @staticmethod
+    def _factory_semantic_scholar():
+        from langchain_community.tools import SemanticScholarQueryRun
+        from langchain_community.utilities import SemanticScholarAPIWrapper
+        api_wrapper = SemanticScholarAPIWrapper()
+        lc_tool = SemanticScholarQueryRun(api_wrapper=api_wrapper)
+        return LangChainToolAdapter(lc_tool).to_tool()
+
+    # ----- 搜索类 -----
+
+    @staticmethod
+    def _factory_news():
+        from langchain_community.tools import NewsSearchResults
+        from langchain_community.utilities import NewsAPIWrapper
+        api_wrapper = NewsAPIWrapper()
+        lc_tool = NewsSearchResults(api_wrapper=api_wrapper)
+        return LangChainToolAdapter(lc_tool).to_tool()
+
+    @staticmethod
+    def _factory_google_search():
+        from langchain_community.tools import GoogleSearchResults
+        lc_tool = GoogleSearchResults()
+        return LangChainToolAdapter(lc_tool).to_tool()
+
+    @staticmethod
+    def _factory_bing_search():
+        from langchain_community.tools import BingSearchResults
+        lc_tool = BingSearchResults()
+        return LangChainToolAdapter(lc_tool).to_tool()
+
+    @staticmethod
+    def _factory_searx_search():
+        from langchain_community.tools import SearxSearchResults
+        lc_tool = SearxSearchResults()
+        return LangChainToolAdapter(lc_tool).to_tool()
+
+    @staticmethod
+    def _factory_websearch():
+        from langchain_community.tools import DuckDuckGoSearchResults
+        lc_tool = DuckDuckGoSearchResults()
+        return LangChainToolAdapter(lc_tool).to_tool()
+
+    @staticmethod
+    def _factory_metaphor():
+        from langchain_community.tools import MetaphorSearchResults
+        lc_tool = MetaphorSearchResults()
+        return LangChainToolAdapter(lc_tool).to_tool()
+
+    @staticmethod
+    def _factory_google_images():
+        from langchain_community.tools import GoogleImageSearch
+        lc_tool = GoogleImageSearch()
+        return LangChainToolAdapter(lc_tool).to_tool()
+
+    # ----- 工具类 -----
+
+    @staticmethod
+    def _factory_webloader():
+        from langchain_community.tools import WebBaseLoaderTool
+        lc_tool = WebBaseLoaderTool()
+        return LangChainToolAdapter(lc_tool).to_tool()
+
+    @staticmethod
+    def _factory_calculator():
+        from langchain_community.tools import Calculator
+        lc_tool = Calculator()
+        return LangChainToolAdapter(lc_tool).to_tool()
+
+    @staticmethod
+    def _factory_python_runner():
+        from langchain_community.tools import PythonREPLTool
+        lc_tool = PythonREPLTool()
+        return LangChainToolAdapter(lc_tool).to_tool()
+
+    @staticmethod
+    def _factory_shell_exec():
+        from langchain_community.tools import ShellTool
+        lc_tool = ShellTool()
+        return LangChainToolAdapter(lc_tool).to_tool()
+
+    @staticmethod
+    def _factory_file_read():
+        from langchain_community.tools import FileReadTool
+        lc_tool = FileReadTool()
+        return LangChainToolAdapter(lc_tool).to_tool()
+
+    @staticmethod
+    def _factory_file_write():
+        from langchain_community.tools import FileWriteTool
+        lc_tool = FileWriteTool()
+        return LangChainToolAdapter(lc_tool).to_tool()
+
+    @staticmethod
+    def _factory_sql_query():
+        # SQL 工具需要数据库连接配置
+        from langchain_community.tools import SQLDatabaseToolkit
+        from langchain_community.utilities import SQLDatabase
+        try:
+            db = SQLDatabase.from_uri("sqlite:///./example.db")
+            toolkit = SQLDatabaseToolkit(db=db)
+            return LangChainToolkitAdapter(toolkit).to_tools()
+        except Exception:
+            logger.warning("SQL 工具需要数据库连接配置")
+            return None
+
+    # ----- 高级工具 -----
+    # pal_math 与 pal_code 实现一致，注册表中共享 _factory_pal_math
+
+    @staticmethod
+    def _factory_pal_math():
+        from langchain_experimental.tools import PythonAstREPLTool
+        lc_tool = PythonAstREPLTool()
+        return LangChainToolAdapter(lc_tool).to_tool()
+
+    @staticmethod
+    def _factory_wolfram_alpha():
+        from langchain_community.tools import WolframAlphaQueryRun
+        from langchain_community.utilities import WolframAlphaAPIWrapper
+        api_wrapper = WolframAlphaAPIWrapper()
+        lc_tool = WolframAlphaQueryRun(api_wrapper=api_wrapper)
+        return LangChainToolAdapter(lc_tool).to_tool()
+
+    @staticmethod
+    def _factory_wolfram_alpha_tool():
+        from langchain_community.tools import WolframAlphaTool
+        lc_tool = WolframAlphaTool()
+        return LangChainToolAdapter(lc_tool).to_tool()
+
+    # ----- 天气类 -----
+    # weather 与 openweather 实现一致，注册表中共享 _factory_openweather
+
+    @staticmethod
+    def _factory_openweather():
+        from langchain_community.tools import OpenWeatherMapQueryRun
+        from langchain_community.utilities import OpenWeatherMapAPIWrapper
+        api_wrapper = OpenWeatherMapAPIWrapper()
+        lc_tool = OpenWeatherMapQueryRun(api_wrapper=api_wrapper)
+        return LangChainToolAdapter(lc_tool).to_tool()
+
+    # ----- 金融类 -----
+
+    @staticmethod
+    def _factory_stock():
+        from langchain_community.tools import YahooFinanceQueryRun
+        from langchain_community.utilities import YahooFinanceAPIWrapper
+        api_wrapper = YahooFinanceAPIWrapper()
+        lc_tool = YahooFinanceQueryRun(api_wrapper=api_wrapper)
+        return LangChainToolAdapter(lc_tool).to_tool()
+
+    @staticmethod
+    def _factory_alphavantage():
+        from langchain_community.tools import AlphaVantageQueryRun
+        from langchain_community.utilities import AlphaVantageAPIWrapper
+        api_wrapper = AlphaVantageAPIWrapper()
+        lc_tool = AlphaVantageQueryRun(api_wrapper=api_wrapper)
+        return LangChainToolAdapter(lc_tool).to_tool()
+
+    # ----- 地图类 -----
+    # maps 与 google_maps 实现一致，注册表中共享 _factory_google_maps
+
+    @staticmethod
+    def _factory_google_maps():
+        from langchain_community.tools import GoogleMapsQueryRun
+        from langchain_community.utilities import GoogleMapsAPIWrapper
+        api_wrapper = GoogleMapsAPIWrapper()
+        lc_tool = GoogleMapsQueryRun(api_wrapper=api_wrapper)
+        return LangChainToolAdapter(lc_tool).to_tool()
+
+    # ----- 翻译类 -----
+
+    @staticmethod
+    def _factory_google_translate():
+        from langchain_community.tools import GoogleTranslateQueryRun
+        from langchain_community.utilities import GoogleTranslateAPIWrapper
+        api_wrapper = GoogleTranslateAPIWrapper()
+        lc_tool = GoogleTranslateQueryRun(api_wrapper=api_wrapper)
+        return LangChainToolAdapter(lc_tool).to_tool()
+
+    # ----- 邮件类 -----
+
+    @staticmethod
+    def _factory_email_send():
+        from langchain_community.tools import SendEmailTool
+        lc_tool = SendEmailTool()
+        return LangChainToolAdapter(lc_tool).to_tool()
+
+    @staticmethod
+    def _factory_gmail():
+        from langchain_community.agent_toolkits import GmailToolkit
+        toolkit = GmailToolkit()
+        return LangChainToolkitAdapter(toolkit).to_tools()
+
+    # ----- 日历/云盘 -----
+
+    @staticmethod
+    def _factory_gcalendar():
+        from langchain_community.agent_toolkits import GoogleCalendarToolkit
+        toolkit = GoogleCalendarToolkit()
+        return LangChainToolkitAdapter(toolkit).to_tools()
+
+    @staticmethod
+    def _factory_gdrive():
+        from langchain_community.agent_toolkits import GoogleDriveToolkit
+        toolkit = GoogleDriveToolkit()
+        return LangChainToolkitAdapter(toolkit).to_tools()
+
+    # ----- 协作工具 -----
+
+    @staticmethod
+    def _factory_github():
+        from langchain_community.agent_toolkits import GitHubToolkit
+        toolkit = GitHubToolkit()
+        return LangChainToolkitAdapter(toolkit).to_tools()
+
+    @staticmethod
+    def _factory_slack():
+        from langchain_community.tools import SlackMessageTool
+        lc_tool = SlackMessageTool()
+        return LangChainToolAdapter(lc_tool).to_tool()
+
+    @staticmethod
+    def _factory_discord():
+        from langchain_community.tools import DiscordTool
+        lc_tool = DiscordTool()
+        return LangChainToolAdapter(lc_tool).to_tool()
+
+    @staticmethod
+    def _factory_trello():
+        from langchain_community.agent_toolkits import TrelloToolkit
+        toolkit = TrelloToolkit()
+        return LangChainToolkitAdapter(toolkit).to_tools()
+
+    @staticmethod
+    def _factory_jira():
+        from langchain_community.agent_toolkits import JiraToolkit
+        toolkit = JiraToolkit()
+        return LangChainToolkitAdapter(toolkit).to_tools()
+
+    @staticmethod
+    def _factory_confluence():
+        from langchain_community.agent_toolkits import ConfluenceToolkit
+        toolkit = ConfluenceToolkit()
+        return LangChainToolkitAdapter(toolkit).to_tools()
+
+    @staticmethod
+    def _factory_notion():
+        from langchain_community.agent_toolkits import NotionToolkit
+        toolkit = NotionToolkit()
+        return LangChainToolkitAdapter(toolkit).to_tools()
+
+    @staticmethod
+    def _factory_zapier():
+        from langchain_community.agent_toolkits import ZapierToolkit
+        toolkit = ZapierToolkit()
+        return LangChainToolkitAdapter(toolkit).to_tools()
+
+    # ----- 社交媒体 -----
+
+    @staticmethod
+    def _factory_twitter():
+        from langchain_community.tools import TwitterTool
+        lc_tool = TwitterTool()
+        return LangChainToolAdapter(lc_tool).to_tool()
+
+    @staticmethod
+    def _factory_facebook():
+        from langchain_community.tools import FacebookTool
+        lc_tool = FacebookTool()
+        return LangChainToolAdapter(lc_tool).to_tool()
+
+    @staticmethod
+    def _factory_linkedin():
+        from langchain_community.tools import LinkedInTool
+        lc_tool = LinkedInTool()
+        return LangChainToolAdapter(lc_tool).to_tool()
+
+    @staticmethod
+    def _factory_youtube():
+        from langchain_community.agent_toolkits import YouTubeToolkit
+        toolkit = YouTubeToolkit()
+        return LangChainToolkitAdapter(toolkit).to_tools()
+
+    # ----- 浏览器 -----
+
+    @staticmethod
+    def _factory_browser():
+        from langchain_community.tools import PlaywrightBrowserTool
+        lc_tool = PlaywrightBrowserTool()
+        return LangChainToolAdapter(lc_tool).to_tool()
+
+    # ============================================================
+    # LangChain 工具工厂注册表
+    # ============================================================
+    # 名称 → 工厂函数的映射表，_create_langchain_tool 通过查表分发。
+    # 实现一致的工具（weather/openweather、maps/google_maps、pal_math/pal_code）
+    # 共享同一工厂以避免重复代码。
+    _LANGCHAIN_TOOL_FACTORIES: Dict[str, Callable[[], Any]] = {
+        # 知识搜索类
+        "wikipedia": _factory_wikipedia,
+        "arxiv": _factory_arxiv,
+        "arxiv_papers": _factory_arxiv_papers,
+        "pubmed": _factory_pubmed,
+        "semantic_scholar": _factory_semantic_scholar,
+        # 搜索类
+        "news": _factory_news,
+        "google_search": _factory_google_search,
+        "bing_search": _factory_bing_search,
+        "searx_search": _factory_searx_search,
+        "websearch": _factory_websearch,
+        "metaphor": _factory_metaphor,
+        "google_images": _factory_google_images,
+        # 工具类
+        "webloader": _factory_webloader,
+        "calculator": _factory_calculator,
+        "python_runner": _factory_python_runner,
+        "shell_exec": _factory_shell_exec,
+        "file_read": _factory_file_read,
+        "file_write": _factory_file_write,
+        "sql_query": _factory_sql_query,
+        # 高级工具（pal_code 与 pal_math 实现一致）
+        "pal_math": _factory_pal_math,
+        "pal_code": _factory_pal_math,
+        "wolfram_alpha": _factory_wolfram_alpha,
+        "wolfram_alpha_tool": _factory_wolfram_alpha_tool,
+        # 天气类（weather 与 openweather 实现一致）
+        "weather": _factory_openweather,
+        "openweather": _factory_openweather,
+        # 金融类
+        "stock": _factory_stock,
+        "alphavantage": _factory_alphavantage,
+        # 地图类（maps 与 google_maps 实现一致）
+        "maps": _factory_google_maps,
+        "google_maps": _factory_google_maps,
+        # 翻译类
+        "google_translate": _factory_google_translate,
+        # 邮件类
+        "email_send": _factory_email_send,
+        "gmail": _factory_gmail,
+        # 日历/云盘
+        "gcalendar": _factory_gcalendar,
+        "gdrive": _factory_gdrive,
+        # 协作工具
+        "github": _factory_github,
+        "slack": _factory_slack,
+        "discord": _factory_discord,
+        "trello": _factory_trello,
+        "jira": _factory_jira,
+        "confluence": _factory_confluence,
+        "notion": _factory_notion,
+        "zapier": _factory_zapier,
+        # 社交媒体
+        "twitter": _factory_twitter,
+        "facebook": _factory_facebook,
+        "linkedin": _factory_linkedin,
+        "youtube": _factory_youtube,
+        # 浏览器
+        "browser": _factory_browser,
+    }
+
     @classmethod
     def _create_langchain_tool(cls, name: str) -> Optional["Tool"]:
-        """创建单个 LangChain 工具"""
+        """创建单个 LangChain 工具
+
+        通过 _LANGCHAIN_TOOL_FACTORIES 注册表查找对应工厂函数并调用。
+        工厂函数内部完成懒加载导入；未注册名称或导入失败时返回 None。
+        """
+        factory = cls._LANGCHAIN_TOOL_FACTORIES.get(name)
+        if factory is None:
+            logger.warning(f"未知的 LangChain 工具: {name}")
+            return None
         try:
-            # ===== 知识搜索类 =====
-            if name == "wikipedia":
-                from langchain_community.tools import WikipediaQueryRun
-                from langchain_community.utilities import WikipediaAPIWrapper
-                api_wrapper = WikipediaAPIWrapper()
-                lc_tool = WikipediaQueryRun(api_wrapper=api_wrapper)
-                return LangChainToolAdapter(lc_tool).to_tool()
-            
-            elif name == "arxiv":
-                from langchain_community.tools import ArxivQueryRun
-                from langchain_community.utilities import ArxivAPIWrapper
-                api_wrapper = ArxivAPIWrapper()
-                lc_tool = ArxivQueryRun(api_wrapper=api_wrapper)
-                return LangChainToolAdapter(lc_tool).to_tool()
-            
-            elif name == "arxiv_papers":
-                from langchain_community.tools import ArxivQueryRun
-                from langchain_community.utilities import ArxivAPIWrapper
-                api_wrapper = ArxivAPIWrapper(top_k_results=5)
-                lc_tool = ArxivQueryRun(api_wrapper=api_wrapper)
-                return LangChainToolAdapter(lc_tool).to_tool()
-            
-            elif name == "pubmed":
-                from langchain_community.tools import PubMedQueryRun
-                from langchain_community.utilities import PubMedAPIWrapper
-                api_wrapper = PubMedAPIWrapper()
-                lc_tool = PubMedQueryRun(api_wrapper=api_wrapper)
-                return LangChainToolAdapter(lc_tool).to_tool()
-            
-            elif name == "semantic_scholar":
-                from langchain_community.tools import SemanticScholarQueryRun
-                from langchain_community.utilities import SemanticScholarAPIWrapper
-                api_wrapper = SemanticScholarAPIWrapper()
-                lc_tool = SemanticScholarQueryRun(api_wrapper=api_wrapper)
-                return LangChainToolAdapter(lc_tool).to_tool()
-            
-            # ===== 搜索类 =====
-            elif name == "news":
-                from langchain_community.tools import NewsSearchResults
-                from langchain_community.utilities import NewsAPIWrapper
-                api_wrapper = NewsAPIWrapper()
-                lc_tool = NewsSearchResults(api_wrapper=api_wrapper)
-                return LangChainToolAdapter(lc_tool).to_tool()
-            
-            elif name == "google_search":
-                from langchain_community.tools import GoogleSearchResults
-                lc_tool = GoogleSearchResults()
-                return LangChainToolAdapter(lc_tool).to_tool()
-            
-            elif name == "bing_search":
-                from langchain_community.tools import BingSearchResults
-                lc_tool = BingSearchResults()
-                return LangChainToolAdapter(lc_tool).to_tool()
-            
-            elif name == "searx_search":
-                from langchain_community.tools import SearxSearchResults
-                lc_tool = SearxSearchResults()
-                return LangChainToolAdapter(lc_tool).to_tool()
-            
-            elif name == "websearch":
-                from langchain_community.tools import DuckDuckGoSearchResults
-                lc_tool = DuckDuckGoSearchResults()
-                return LangChainToolAdapter(lc_tool).to_tool()
-            
-            elif name == "metaphor":
-                from langchain_community.tools import MetaphorSearchResults
-                lc_tool = MetaphorSearchResults()
-                return LangChainToolAdapter(lc_tool).to_tool()
-            
-            elif name == "google_images":
-                from langchain_community.tools import GoogleImageSearch
-                lc_tool = GoogleImageSearch()
-                return LangChainToolAdapter(lc_tool).to_tool()
-            
-            # ===== 工具类 =====
-            elif name == "webloader":
-                from langchain_community.tools import WebBaseLoaderTool
-                lc_tool = WebBaseLoaderTool()
-                return LangChainToolAdapter(lc_tool).to_tool()
-            
-            elif name == "calculator":
-                from langchain_community.tools import Calculator
-                lc_tool = Calculator()
-                return LangChainToolAdapter(lc_tool).to_tool()
-            
-            elif name == "python_runner":
-                from langchain_community.tools import PythonREPLTool
-                lc_tool = PythonREPLTool()
-                return LangChainToolAdapter(lc_tool).to_tool()
-            
-            elif name == "shell_exec":
-                from langchain_community.tools import ShellTool
-                lc_tool = ShellTool()
-                return LangChainToolAdapter(lc_tool).to_tool()
-            
-            elif name == "file_read":
-                from langchain_community.tools import FileReadTool
-                lc_tool = FileReadTool()
-                return LangChainToolAdapter(lc_tool).to_tool()
-            
-            elif name == "file_write":
-                from langchain_community.tools import FileWriteTool
-                lc_tool = FileWriteTool()
-                return LangChainToolAdapter(lc_tool).to_tool()
-            
-            elif name == "sql_query":
-                from langchain_community.tools import SQLDatabaseToolkit
-                from langchain_community.utilities import SQLDatabase
-                try:
-                    db = SQLDatabase.from_uri("sqlite:///./example.db")
-                    toolkit = SQLDatabaseToolkit(db=db)
-                    return LangChainToolkitAdapter(toolkit).to_tools()
-                except Exception:
-                    logger.warning("SQL 工具需要数据库连接配置")
-                    return None
-            
-            # ===== 高级工具 =====
-            elif name == "pal_math":
-                from langchain_experimental.tools import PythonAstREPLTool
-                lc_tool = PythonAstREPLTool()
-                return LangChainToolAdapter(lc_tool).to_tool()
-            
-            elif name == "pal_code":
-                from langchain_experimental.tools import PythonAstREPLTool
-                lc_tool = PythonAstREPLTool()
-                return LangChainToolAdapter(lc_tool).to_tool()
-            
-            elif name == "wolfram_alpha":
-                from langchain_community.tools import WolframAlphaQueryRun
-                from langchain_community.utilities import WolframAlphaAPIWrapper
-                api_wrapper = WolframAlphaAPIWrapper()
-                lc_tool = WolframAlphaQueryRun(api_wrapper=api_wrapper)
-                return LangChainToolAdapter(lc_tool).to_tool()
-            
-            elif name == "wolfram_alpha_tool":
-                from langchain_community.tools import WolframAlphaTool
-                lc_tool = WolframAlphaTool()
-                return LangChainToolAdapter(lc_tool).to_tool()
-            
-            # ===== 天气类 =====
-            elif name == "weather":
-                from langchain_community.tools import OpenWeatherMapQueryRun
-                from langchain_community.utilities import OpenWeatherMapAPIWrapper
-                api_wrapper = OpenWeatherMapAPIWrapper()
-                lc_tool = OpenWeatherMapQueryRun(api_wrapper=api_wrapper)
-                return LangChainToolAdapter(lc_tool).to_tool()
-            
-            elif name == "openweather":
-                from langchain_community.tools import OpenWeatherMapQueryRun
-                from langchain_community.utilities import OpenWeatherMapAPIWrapper
-                api_wrapper = OpenWeatherMapAPIWrapper()
-                lc_tool = OpenWeatherMapQueryRun(api_wrapper=api_wrapper)
-                return LangChainToolAdapter(lc_tool).to_tool()
-            
-            # ===== 金融类 =====
-            elif name == "stock":
-                from langchain_community.tools import YahooFinanceQueryRun
-                from langchain_community.utilities import YahooFinanceAPIWrapper
-                api_wrapper = YahooFinanceAPIWrapper()
-                lc_tool = YahooFinanceQueryRun(api_wrapper=api_wrapper)
-                return LangChainToolAdapter(lc_tool).to_tool()
-            
-            elif name == "alphavantage":
-                from langchain_community.tools import AlphaVantageQueryRun
-                from langchain_community.utilities import AlphaVantageAPIWrapper
-                api_wrapper = AlphaVantageAPIWrapper()
-                lc_tool = AlphaVantageQueryRun(api_wrapper=api_wrapper)
-                return LangChainToolAdapter(lc_tool).to_tool()
-            
-            # ===== 地图类 =====
-            elif name == "maps":
-                from langchain_community.tools import GoogleMapsQueryRun
-                from langchain_community.utilities import GoogleMapsAPIWrapper
-                api_wrapper = GoogleMapsAPIWrapper()
-                lc_tool = GoogleMapsQueryRun(api_wrapper=api_wrapper)
-                return LangChainToolAdapter(lc_tool).to_tool()
-            
-            elif name == "google_maps":
-                from langchain_community.tools import GoogleMapsQueryRun
-                from langchain_community.utilities import GoogleMapsAPIWrapper
-                api_wrapper = GoogleMapsAPIWrapper()
-                lc_tool = GoogleMapsQueryRun(api_wrapper=api_wrapper)
-                return LangChainToolAdapter(lc_tool).to_tool()
-            
-            # ===== 翻译类 =====
-            elif name == "google_translate":
-                from langchain_community.tools import GoogleTranslateQueryRun
-                from langchain_community.utilities import GoogleTranslateAPIWrapper
-                api_wrapper = GoogleTranslateAPIWrapper()
-                lc_tool = GoogleTranslateQueryRun(api_wrapper=api_wrapper)
-                return LangChainToolAdapter(lc_tool).to_tool()
-            
-            # ===== 邮件类 =====
-            elif name == "email_send":
-                from langchain_community.tools import SendEmailTool
-                lc_tool = SendEmailTool()
-                return LangChainToolAdapter(lc_tool).to_tool()
-            
-            elif name == "gmail":
-                from langchain_community.agent_toolkits import GmailToolkit
-                toolkit = GmailToolkit()
-                return LangChainToolkitAdapter(toolkit).to_tools()
-            
-            # ===== 日历/云盘 =====
-            elif name == "gcalendar":
-                from langchain_community.agent_toolkits import GoogleCalendarToolkit
-                toolkit = GoogleCalendarToolkit()
-                return LangChainToolkitAdapter(toolkit).to_tools()
-            
-            elif name == "gdrive":
-                from langchain_community.agent_toolkits import GoogleDriveToolkit
-                toolkit = GoogleDriveToolkit()
-                return LangChainToolkitAdapter(toolkit).to_tools()
-            
-            # ===== 协作工具 =====
-            elif name == "github":
-                from langchain_community.agent_toolkits import GitHubToolkit
-                toolkit = GitHubToolkit()
-                return LangChainToolkitAdapter(toolkit).to_tools()
-            
-            elif name == "slack":
-                from langchain_community.tools import SlackMessageTool
-                lc_tool = SlackMessageTool()
-                return LangChainToolAdapter(lc_tool).to_tool()
-            
-            elif name == "discord":
-                from langchain_community.tools import DiscordTool
-                lc_tool = DiscordTool()
-                return LangChainToolAdapter(lc_tool).to_tool()
-            
-            elif name == "trello":
-                from langchain_community.agent_toolkits import TrelloToolkit
-                toolkit = TrelloToolkit()
-                return LangChainToolkitAdapter(toolkit).to_tools()
-            
-            elif name == "jira":
-                from langchain_community.agent_toolkits import JiraToolkit
-                toolkit = JiraToolkit()
-                return LangChainToolkitAdapter(toolkit).to_tools()
-            
-            elif name == "confluence":
-                from langchain_community.agent_toolkits import ConfluenceToolkit
-                toolkit = ConfluenceToolkit()
-                return LangChainToolkitAdapter(toolkit).to_tools()
-            
-            elif name == "notion":
-                from langchain_community.agent_toolkits import NotionToolkit
-                toolkit = NotionToolkit()
-                return LangChainToolkitAdapter(toolkit).to_tools()
-            
-            elif name == "zapier":
-                from langchain_community.agent_toolkits import ZapierToolkit
-                toolkit = ZapierToolkit()
-                return LangChainToolkitAdapter(toolkit).to_tools()
-            
-            # ===== 社交媒体 =====
-            elif name == "twitter":
-                from langchain_community.tools import TwitterTool
-                lc_tool = TwitterTool()
-                return LangChainToolAdapter(lc_tool).to_tool()
-            
-            elif name == "facebook":
-                from langchain_community.tools import FacebookTool
-                lc_tool = FacebookTool()
-                return LangChainToolAdapter(lc_tool).to_tool()
-            
-            elif name == "linkedin":
-                from langchain_community.tools import LinkedInTool
-                lc_tool = LinkedInTool()
-                return LangChainToolAdapter(lc_tool).to_tool()
-            
-            elif name == "youtube":
-                from langchain_community.agent_toolkits import YouTubeToolkit
-                toolkit = YouTubeToolkit()
-                return LangChainToolkitAdapter(toolkit).to_tools()
-            
-            # ===== 浏览器 =====
-            elif name == "browser":
-                from langchain_community.tools import PlaywrightBrowserTool
-                lc_tool = PlaywrightBrowserTool()
-                return LangChainToolAdapter(lc_tool).to_tool()
-            
-            else:
-                logger.warning(f"未知的 LangChain 工具: {name}")
-                return None
-        
+            return factory()
         except ImportError as e:
             missing_pkg = str(e).split("'")[1] if "'" in str(e) else "langchain-community"
             logger.warning(f"工具 {name} 依赖缺失: {missing_pkg}，请安装: pip install {missing_pkg}")
             return None
-        
         except Exception as e:
             logger.warning(f"创建 LangChain 工具 {name} 失败: {e}")
             return None

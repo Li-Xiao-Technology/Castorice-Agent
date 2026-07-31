@@ -91,6 +91,18 @@ class MemoryOpsMixin:
                     except Exception as e:
                         logger.debug(f"P2.4 元认知学习失败: {e}")
 
+            # 反思后自动更新自我概念（从对话经历中学习）
+            if hasattr(self, 'self_concept') and self.self_concept:
+                try:
+                    await asyncio.to_thread(
+                        self.self_concept.update_from_experience,
+                        state.user_input,
+                        state.final_answer or "",
+                        self.model,
+                    )
+                except Exception as e:
+                    logger.debug(f"反思后自我概念更新失败: {e}")
+
             # A1: 反思后自动生成自传式时期总结（每10轮触发一次）
             if hasattr(self, 'autobiographical'):
                 self._reflection_counter = getattr(self, '_reflection_counter', 0)
@@ -161,16 +173,17 @@ class MemoryOpsMixin:
 
             # P1-2: long_term.add() 和 short_term.update_summary() 是同步阻塞操作，
             # 用 asyncio.to_thread 避免阻塞事件循环
-            await asyncio.to_thread(
-                self.long_term.add,
-                text=memory_text,
-                metadata={
-                    "type": "task_summary",
-                    "session_id": state.session_id,
-                    "success": state.success,
-                    "intent": state.intent_type,
-                },
-            )
+            if self.long_term is not None:
+                await asyncio.to_thread(
+                    self.long_term.add,
+                    text=memory_text,
+                    metadata={
+                        "type": "task_summary",
+                        "session_id": state.session_id,
+                        "success": state.success,
+                        "intent": state.intent_type,
+                    },
+                )
             summary = state.user_input[:50] + ("..." if len(state.user_input) > 50 else "")
             await asyncio.to_thread(
                 self.short_term.update_summary, state.session_id, summary
@@ -545,8 +558,8 @@ class MemoryOpsMixin:
                 if len(active_intents) >= 3:
                     logger.debug(f"P2.5 主动话题跳过: 用户有 {len(active_intents)} 个进行中意图")
                     return True
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"P2.5 主动话题-意图查询失败: {e}")
 
         # 3. 情绪太低落
         try:
@@ -556,8 +569,8 @@ class MemoryOpsMixin:
                 if p < -0.5:
                     logger.debug(f"P2.5 主动话题跳过: 情绪低落(p={p:.2f})")
                     return True
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"P2.5 主动话题-情绪查询失败: {e}")
 
         # 4. 关系太陌生（亲密度 < 0.3）
         if hasattr(self, 'social_relation'):
@@ -567,8 +580,8 @@ class MemoryOpsMixin:
                 if relation and relation.intimacy < 0.3:
                     logger.debug(f"P2.5 主动话题跳过: 关系陌生(intimacy={relation.intimacy:.2f})")
                     return True
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"P2.5 主动话题-关系查询失败: {e}")
 
         return False
 
@@ -581,15 +594,15 @@ class MemoryOpsMixin:
             try:
                 with self.motivation_system._lock:
                     curiosity_concepts = self.motivation_system._curiosity_queue[:3]
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"主动话题-好奇心队列读取失败: {e}")
 
         active_intents = []
         if hasattr(self, 'intent_tracker'):
             try:
                 active_intents = self.intent_tracker.get_active_intents(limit=3)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"主动话题-意图读取失败: {e}")
 
         relation_info = ""
         if hasattr(self, 'social_relation'):
@@ -598,8 +611,8 @@ class MemoryOpsMixin:
                 relation = self.social_relation.get_relation(user_id)
                 if relation:
                     relation_info = f"亲密度={relation.intimacy:.2f}, 信任度={relation.trust_level:.2f}"
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"主动话题-关系读取失败: {e}")
 
         prompt = f"""你是一个善于主动发起话题的 AI。请根据以下对话信息，判断是否应该主动发起一个自然的延续话题。
 

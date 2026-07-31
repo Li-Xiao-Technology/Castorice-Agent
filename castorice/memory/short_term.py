@@ -3,15 +3,15 @@
 （从原 castorice_memory.short_term_memory 迁移，去除冗余导入）
 """
 
-import atexit
 import json
 import logging
 import sqlite3
-import threading
-import time
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Any
+
+from castorice.storage import SqliteStorage
+from castorice.memory.interface import ShortTermMemoryInterface
 
 logger = logging.getLogger("Castorice.ShortTermMemory")
 
@@ -40,62 +40,19 @@ class Message:
         return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
 
 
-class ShortTermMemory:
+class ShortTermMemory(SqliteStorage, ShortTermMemoryInterface):
     """短时记忆管理器（SQLite 持久化）"""
-
-    # P1-22: 类级连接跟踪，用于 atexit 时关闭所有线程的连接
-    _all_connections_lock = threading.Lock()
-    _all_connections: set = set()
-    _atexit_registered = False
 
     def __init__(self, db_path: str = "./castorice_data/sessions.db", max_turns: int = 20,
                  session_ttl_days: int = 30):
-        self.db_path = db_path
+        super().__init__(db_path)
         self.max_turns = max_turns
         self.session_ttl_days = session_ttl_days
-        self._local = threading.local()
-        # P1-20: WAL checkpoint 时间戳与间隔（5 分钟）
-        self._last_checkpoint: float = 0.0
-        self._checkpoint_interval: float = 300.0
         self._init_db()
-        # P1-22: 注册 atexit 清理（只注册一次）
-        with ShortTermMemory._all_connections_lock:
-            if not ShortTermMemory._atexit_registered:
-                atexit.register(ShortTermMemory._cleanup_all_connections)
-                ShortTermMemory._atexit_registered = True
-        # P1-21: 启动时清理老会话
         try:
             self.cleanup_old_sessions()
         except Exception as e:
             logger.warning(f"P1-21: 启动清理老会话失败: {e}")
-
-    def _get_conn(self) -> sqlite3.Connection:
-        """获取当前线程的 SQLite 连接（线程单例，启用 WAL 模式避免多线程锁冲突）"""
-        if not hasattr(self._local, "conn") or self._local.conn is None:
-            import os
-            os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
-            conn = sqlite3.connect(self.db_path, timeout=30.0)
-            # P1-4: 启用 WAL 模式 + 调整同步策略
-            # WAL: 多读单写不阻塞，HTTP Server + QQ Bot + Agent 主线程并发写时不再 database is locked
-            # synchronous=NORMAL: WAL 模式下兼顾性能与安全（事务提交时才 fsync）
-            conn.execute("PRAGMA journal_mode=WAL;")
-            conn.execute("PRAGMA synchronous=NORMAL;")
-            conn.execute("PRAGMA foreign_keys=ON;")
-            # 行缓存大小提升读性能
-            conn.execute("PRAGMA cache_size=-8000;")  # 8MB
-            self._local.conn = conn
-            # P1-22: 跟踪连接用于 atexit 清理
-            with ShortTermMemory._all_connections_lock:
-                ShortTermMemory._all_connections.add(conn)
-        # P1-20: 定期执行 WAL checkpoint，防止 WAL 文件无限增长
-        now = time.time()
-        if now - self._last_checkpoint > self._checkpoint_interval:
-            try:
-                self._local.conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
-                self._last_checkpoint = now
-            except Exception as e:
-                logger.debug(f"P1-20: WAL checkpoint 失败: {e}")
-        return self._local.conn
 
     def cleanup_old_sessions(self, days: Optional[int] = None) -> int:
         """
@@ -130,17 +87,6 @@ class ShortTermMemory:
             conn.rollback()
             logger.error(f"清理老会话失败: {e}")
             return 0
-
-    @classmethod
-    def _cleanup_all_connections(cls) -> None:
-        """P1-22: atexit 时关闭所有线程的 SQLite 连接，防止连接泄漏"""
-        with cls._all_connections_lock:
-            for conn in cls._all_connections:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
-            cls._all_connections.clear()
 
     def _init_db(self) -> None:
         """初始化 SQLite 表结构"""
@@ -220,6 +166,7 @@ class ShortTermMemory:
         if limit is None:
             limit = self.max_turns * 2
         conn = self._get_conn()
+        conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute(
             """SELECT role, content, tool_calls, tool_call_id, timestamp, metadata
@@ -230,14 +177,13 @@ class ShortTermMemory:
 
         messages = []
         for row in reversed(rows):
-            role, content, tool_calls_str, tool_call_id, timestamp, metadata_str = row
             msg = Message(
-                role=role, content=content,
-                tool_calls=json.loads(tool_calls_str) if tool_calls_str else None,
-                tool_call_id=tool_call_id, timestamp=timestamp,
-                metadata=json.loads(metadata_str) if metadata_str else {},
+                role=row["role"], content=row["content"],
+                tool_calls=json.loads(row["tool_calls"]) if row["tool_calls"] else None,
+                tool_call_id=row["tool_call_id"], timestamp=row["timestamp"],
+                metadata=json.loads(row["metadata"]) if row["metadata"] else {},
             )
-            if not include_tool_calls and role == "tool":
+            if not include_tool_calls and row["role"] == "tool":
                 continue
             messages.append(msg)
         return messages
@@ -374,23 +320,3 @@ class ShortTermMemory:
                 topics.append(content)
 
         return f"对话主题: {'; '.join(topics)}"
-
-    def close(self) -> None:
-        """关闭当前线程的 SQLite 连接"""
-        if hasattr(self._local, "conn") and self._local.conn is not None:
-            conn = self._local.conn
-            self._local.conn = None
-            # P1-22: 从跟踪集合移除
-            with ShortTermMemory._all_connections_lock:
-                ShortTermMemory._all_connections.discard(conn)
-            try:
-                conn.close()
-            except Exception:
-                pass
-
-    def __del__(self):
-        """析构时尝试关闭连接"""
-        try:
-            self.close()
-        except Exception as e:
-            logger.warning(f"短时记忆析构关闭失败: {e}")

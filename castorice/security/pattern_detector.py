@@ -19,6 +19,18 @@ from typing import Any, Dict, List, Optional, Tuple
 logger = logging.getLogger("Castorice.Security.PatternDetection")
 
 
+_TOOL_CATEGORY_MAP = {
+    "read_file": "file_read",
+    "read_document": "file_read",
+    "write_file": "file_write",
+    "terminal": "shell_exec",
+    "python_repl": "shell_exec",
+    "web_search": "network_send",
+    "web_fetch": "network_send",
+    "get_weather": "network_send",
+}
+
+
 # 危险组合模式（按类别）
 DANGEROUS_COMBINATIONS = [
     {
@@ -94,11 +106,12 @@ class PatternDetector:
     def __init__(self, window_size: int = 100):
         self._lock = threading.RLock()
         self._window: deque = deque(maxlen=window_size)
-        self._alerts: List[Dict[str, Any]] = []
+        self._alerts: deque = deque(maxlen=500)
 
-    def record(self, category: str, target: str) -> None:
-        """记录一次操作"""
+    def record(self, category: str, target: str) -> List[Dict[str, Any]]:
+        """记录一次操作，返回本次新增的告警列表"""
         import re
+        new_alerts: List[Dict[str, Any]] = []
         with self._lock:
             rec = OperationRecord(category, target)
             self._window.append(rec)
@@ -108,9 +121,11 @@ class PatternDetector:
                 matched, alert = self._match_pattern(pattern_def)
                 if matched:
                     self._alerts.append(alert)
+                    new_alerts.append(alert)
                     logger.warning(
                         f"P3.3 检测到危险模式: {pattern_def['name']} | {alert}"
                     )
+        return new_alerts
 
     def _match_pattern(self, pattern_def: Dict) -> Tuple[bool, Dict[str, Any]]:
         """检查窗口内是否匹配某个危险模式"""
@@ -156,7 +171,8 @@ class PatternDetector:
     def get_recent_alerts(self, limit: int = 10) -> List[Dict[str, Any]]:
         """获取最近的告警"""
         with self._lock:
-            return self._alerts[-limit:]
+            # deque 不支持切片，先转 list
+            return list(self._alerts)[-limit:] if limit > 0 else []
 
     def get_stats(self) -> Dict[str, Any]:
         """获取检测器状态"""
@@ -164,13 +180,94 @@ class PatternDetector:
             return {
                 "window_size": len(self._window),
                 "total_alerts": len(self._alerts),
-                "recent_alerts": self._alerts[-5:],
+                "recent_alerts": list(self._alerts)[-5:],
             }
+
+    def check_operation(
+        self,
+        tool_name: str,
+        tool_args: Dict[str, Any],
+        context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        工具执行前的模式安全检查。
+
+        参数:
+            tool_name: 工具名称
+            tool_args: 工具参数字典
+            context: 可选的上下文信息（session_id 等）
+
+        返回:
+            {
+                "should_block": bool,          # 是否应阻断执行（CRITICAL）
+                "alerts": List[Dict],           # 本次操作触发的所有告警
+                "critical": List[Dict],         # CRITICAL 级别告警
+                "high": List[Dict],             # HIGH 级别告警
+                "warnings": List[str],          # 人类可读的警告信息
+            }
+        """
+        import re
+        result = {
+            "should_block": False,
+            "alerts": [],
+            "critical": [],
+            "high": [],
+            "warnings": [],
+        }
+
+        category = _TOOL_CATEGORY_MAP.get(tool_name, "other")
+
+        if category == "file_read":
+            target = str(tool_args)
+        elif category == "file_write":
+            target = str(tool_args.get("file_path", ""))
+        elif category == "shell_exec" and tool_name == "terminal":
+            target = str(tool_args.get("command", ""))
+        elif category == "shell_exec" and tool_name == "python_repl":
+            target = f"python_repl: {str(tool_args.get('code', ''))[:100]}"
+        elif category == "network_send":
+            target = str(tool_args)
+        else:
+            target = f"{tool_name}: {str(tool_args)[:200]}"
+
+        with self._lock:
+            # deque(maxlen=500) 满时 offset 切片会失效，
+            # 改用 record 返回值精确获取本次新增告警
+            new_alerts = self.record(category, target)
+        result["alerts"] = new_alerts
+
+        criticals = [a for a in new_alerts if a.get("severity", "").lower() == "critical"]
+        highs = [a for a in new_alerts if a.get("severity", "").lower() == "high"]
+
+        result["critical"] = criticals
+        result["high"] = highs
+
+        if criticals:
+            result["should_block"] = True
+            result["warnings"] = [
+                f"[{a['severity'].upper()}] {a['pattern_name']}: {a['description']}"
+                for a in criticals
+            ]
+
+        if highs:
+            result["warnings"].extend(
+                f"[{a['severity'].upper()}] {a['pattern_name']}: {a['description']}"
+                for a in highs
+            )
+
+        return result
 
 
 # 全局单例
 _pattern_detector: Optional[PatternDetector] = None
 _pattern_lock = threading.Lock()
+
+
+def set_pattern_detector(instance: PatternDetector) -> None:
+    """手动设置全局模式检测器（Agent 初始化时调用，确保配置生效）"""
+    global _pattern_detector
+    with _pattern_lock:
+        _pattern_detector = instance
 
 
 def get_pattern_detector() -> PatternDetector:

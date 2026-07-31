@@ -79,8 +79,8 @@ class TestSQLiteConnectionPool:
         conn = pool.get_connection()
         pool.release_connection(conn)
         pool.close()
-        # 关闭后池应为空
-        assert len(pool._connections) == 0
+        # 关闭后所有连接集合应为空
+        assert len(pool._all_connections) == 0
 
     def test_concurrent_access(self):
         """测试并发访问"""

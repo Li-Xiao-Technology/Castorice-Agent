@@ -18,6 +18,7 @@ from castorice.memory.skill import SkillMemory
 from castorice.memory.user_profile import UserProfile
 from castorice.memory.long_term import LongTermMemory
 from castorice.alerts import init_alerts_from_config
+from castorice.cost_budget import CostBudget, BudgetConfig
 
 
 class CastoriceEngine:
@@ -42,6 +43,25 @@ class CastoriceEngine:
         llm_cfg = self.config.llm if hasattr(self.config, "llm") else {}
         self.model_adapter = ModelAdapter(llm_cfg)
         self.logger.info(f"模型适配器: {self.model_adapter.provider}")
+
+        # P1-4: 成本闸初始化
+        try:
+            raw_cfg = self.config.raw()
+            budget_raw = (raw_cfg.get("runtime", {}) or {}).get("cost_budget", {}) or {}
+            budget_cfg = BudgetConfig()
+            for k, v in budget_raw.items():
+                if hasattr(budget_cfg, k) and v is not None:
+                    try:
+                        setattr(budget_cfg, k, type(getattr(budget_cfg, k))(v))
+                    except (TypeError, ValueError):
+                        pass
+            self.cost_budget = CostBudget(budget_cfg)
+        except Exception as e:
+            self.logger.warning(f"成本闸初始化失败（将使用无限制默认值）: {e}")
+            self.cost_budget = CostBudget()
+
+        # 把成本闸挂到 model_adapter 上，每次 LLM 调用自动记录
+        self.model_adapter.cost_budget = self.cost_budget
 
         tools_raw_cfg = self.config.raw().get("tools", {})
         self.tools: List[Tool] = get_base_tools(tools_raw_cfg)
@@ -110,10 +130,9 @@ class CastoriceEngine:
             db_path=short_cfg.get("db_path", "./castorice_data/sessions.db"),
             max_turns=short_cfg.get("max_turns", 20),
         )
-        self.long_term = LongTermMemory(
-            persist_directory=long_cfg.get("persist_directory", "./castorice_data/chroma_db"),
-            collection_name=long_cfg.get("collection_name", "castorice_long_term"),
-        )
+        self.long_term = None
+        self._long_term_ready = threading.Event()
+        self._init_long_term_async(long_cfg)
         self.skill_memory = SkillMemory(
             storage_path=skill_cfg.get("storage_path", "./castorice_data/skill_library.json"),
         )
@@ -144,11 +163,123 @@ class CastoriceEngine:
         except (AttributeError, ValueError):
             pass
 
-        self._tool_watcher = None
-        self._start_tool_watcher()
-
         self._bg_services = {}
         self._bg_threads = {}
+
+        self._init_eigenflux()
+
+    def _init_eigenflux(self) -> None:
+        """初始化 EigenFlux 集成分支"""
+        self.eigenflux = {"available": False, "path": None, "authenticated": False, "version": None}
+        self._eigenflux_last_check = 0.0
+        try:
+            from castorice.tools.eigenflux_tool import _find_eigenflux
+            import subprocess
+            import json
+            import time
+
+            exe = _find_eigenflux()
+            if not exe:
+                self.logger.info("EigenFlux: 未安装，跳过集成")
+                return
+
+            self.eigenflux["path"] = exe
+            self.eigenflux["available"] = True
+
+            # 1. 用 doctor 检测版本
+            try:
+                result = subprocess.run(
+                    [exe, "doctor", "--format", "json"],
+                    capture_output=True, text=True, timeout=15,
+                    encoding="utf-8", errors="replace",
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    info = json.loads(result.stdout.strip())
+                    self.eigenflux["version"] = info.get("cli_version")
+            except Exception:
+                pass
+
+            # 2. 用 profile show 检测认证状态（比 doctor 更准确）
+            try:
+                result2 = subprocess.run(
+                    [exe, "profile", "show", "--format", "json", "--no-interactive"],
+                    capture_output=True, text=True, timeout=15,
+                    encoding="utf-8", errors="replace",
+                )
+                if result2.returncode == 0 and result2.stdout.strip():
+                    info2 = json.loads(result2.stdout.strip())
+                    if isinstance(info2, dict) and info2.get("profile"):
+                        self.eigenflux["authenticated"] = True
+            except Exception:
+                pass
+
+            self._eigenflux_last_check = time.time()
+
+            self.logger.info(
+                f"EigenFlux: 已就绪 (v{self.eigenflux['version'] or '?'}, "
+                f"auth={'是' if self.eigenflux['authenticated'] else '否'})"
+            )
+        except Exception as e:
+            self.logger.debug(f"EigenFlux 初始化失败: {e}")
+
+    def _init_long_term_async(self, long_cfg: Dict[str, Any]) -> None:
+        """异步初始化长期记忆（ChromaDB 可能很慢，不阻塞 HTTP 服务启动）"""
+        def _init():
+            try:
+                self.logger.info("长期记忆初始化中（后台线程，不阻塞服务启动）...")
+                self.long_term = LongTermMemory(
+                    persist_directory=long_cfg.get("persist_directory", "./castorice_data/chroma_db"),
+                    collection_name=long_cfg.get("collection_name", "castorice_long_term"),
+                )
+                if getattr(self.long_term, "_available", False):
+                    self.logger.info("长期记忆初始化完成")
+                else:
+                    self.logger.warning("长期记忆初始化失败，相关功能将不可用")
+            except Exception as e:
+                self.logger.warning(f"长期记忆初始化异常: {e}")
+            finally:
+                self._long_term_ready.set()
+
+        t = threading.Thread(target=_init, name="LongTermMemoryInit", daemon=True)
+        t.start()
+
+    def _refresh_eigenflux_auth(self) -> None:
+        """刷新 EigenFlux 认证状态（带缓存，避免频繁调用）"""
+        import time
+        if not self.eigenflux.get("available"):
+            return
+        now = time.time()
+        if now - self._eigenflux_last_check < 60:
+            return
+        self._eigenflux_last_check = now
+        try:
+            import subprocess
+            import json
+            exe = self.eigenflux.get("path")
+            if not exe:
+                return
+            result = subprocess.run(
+                [exe, "profile", "show", "--format", "json", "--no-interactive"],
+                capture_output=True, text=True, timeout=10,
+                encoding="utf-8", errors="replace",
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                info = json.loads(result.stdout.strip())
+                if isinstance(info, dict) and info.get("profile"):
+                    self.eigenflux["authenticated"] = True
+                else:
+                    self.eigenflux["authenticated"] = False
+            else:
+                self.eigenflux["authenticated"] = False
+        except Exception:
+            pass
+
+    def get_eigenflux_status(self) -> Dict[str, Any]:
+        """获取 EigenFlux 状态（会定期刷新认证状态）"""
+        if not hasattr(self, "eigenflux"):
+            return {"available": False}
+        self._refresh_eigenflux_auth()
+        return dict(self.eigenflux)
 
     def _init_plugins_dir(self, plugins_dir: str) -> None:
         """初始化默认插件目录 + 示例插件"""
@@ -181,35 +312,6 @@ __plugin_info__ = {
         except Exception as e:
             self.logger.warning(f"初始化插件目录失败: {e}")
 
-    def _start_tool_watcher(self) -> None:
-        """启动工具文件监控器（自动热更新）"""
-        try:
-            from castorice.tools.watcher import ToolFileWatcher
-            tools_dir = os.path.join(os.path.dirname(__file__), "tools")
-            if os.path.exists(tools_dir):
-                self._tool_watcher = ToolFileWatcher(
-                    tools_dir,
-                    callback=self._on_tool_changed,
-                    poll_interval=5,
-                )
-                self._tool_watcher.start()
-                self.logger.info("工具文件监控器已启动")
-        except Exception as e:
-            self.logger.debug(f"启动工具文件监控器失败: {e}")
-
-    def _on_tool_changed(self, changed_files: List[str]) -> None:
-        """工具文件变更回调"""
-        self.logger.info(f"检测到工具文件变更: {changed_files}")
-        try:
-            from castorice.tools.base_tools import reload_tools
-            reload_tools()
-            self.tools = get_base_tools(self.config.raw().get("tools", {}))
-            self.agent.tools_list = self.tools
-            self.agent.available_tools_desc = "\n".join(f"- {t.name}: {t.description}" for t in self.tools)
-            self.logger.info("工具已重新加载")
-        except Exception as e:
-            self.logger.warning(f"重新加载工具失败: {e}")
-
     def _signal_handler(self, sig, frame) -> None:
         """信号处理器"""
         self.logger.info(f"收到信号 {sig}，正在优雅退出...")
@@ -219,11 +321,6 @@ __plugin_info__ = {
 
     def cleanup(self) -> None:
         """清理资源"""
-        if hasattr(self, '_tool_watcher') and self._tool_watcher:
-            try:
-                self._tool_watcher.stop()
-            except Exception:
-                pass
         if hasattr(self, 'short_term'):
             try:
                 self.short_term.close()
@@ -258,7 +355,23 @@ __plugin_info__ = {
     def run_http_server(self) -> None:
         """运行 HTTP 服务"""
         from .http_server import HttpServer
-        HttpServer(self).run()
+
+        # 启动后台服务（意识引擎、自主循环等）
+        self.start_service("consciousness")
+        self.start_service("auto")
+
+        http_cfg = {}
+        if hasattr(self.config, 'http_server'):
+            http_cfg = self.config.http_server or {}
+        host = http_cfg.get("host", "127.0.0.1") if isinstance(http_cfg, dict) else "127.0.0.1"
+        port = int(http_cfg.get("port", 5477)) if isinstance(http_cfg, dict) else 5477
+        require_auth = bool(http_cfg.get("require_auth", False)) if isinstance(http_cfg, dict) else False
+        cors_origins = http_cfg.get("cors_origins") if isinstance(http_cfg, dict) else None
+        api_keys = http_cfg.get("api_keys") if isinstance(http_cfg, dict) else None
+
+        server = HttpServer(self)
+        self.logger.info(f"HTTP 服务器配置: host={host}, port={port}, auth={require_auth}")
+        server.run()
 
     def run_qq_bot(self) -> None:
         """运行 QQ 机器人"""
@@ -295,12 +408,20 @@ __plugin_info__ = {
                 return True
             elif service_name == "http":
                 from .http_server import HttpServer
+                http_cfg = {}
+                if hasattr(self.config, 'http_server'):
+                    http_cfg = self.config.http_server or {}
+                host = http_cfg.get("host", "127.0.0.1") if isinstance(http_cfg, dict) else "127.0.0.1"
+                port = int(http_cfg.get("port", 5477)) if isinstance(http_cfg, dict) else 5477
+                require_auth = bool(http_cfg.get("require_auth", False)) if isinstance(http_cfg, dict) else False
+                cors_origins = http_cfg.get("cors_origins") if isinstance(http_cfg, dict) else None
+                api_keys = http_cfg.get("api_keys") if isinstance(http_cfg, dict) else None
                 service = HttpServer(self)
                 self._bg_services["http"] = service
                 thread = threading.Thread(target=service.run, daemon=True, name="HttpServer")
                 thread.start()
                 self._bg_threads["http"] = thread
-                self.logger.info("HTTP 服务器已在后台启动")
+                self.logger.info(f"HTTP 服务器已在后台启动 (port={port})")
                 return True
             elif service_name == "cron":
                 from .cron_scheduler import CronScheduler
@@ -310,6 +431,27 @@ __plugin_info__ = {
                 thread.start()
                 self._bg_threads["cron"] = thread
                 self.logger.info("定时任务调度器已在后台启动")
+                return True
+            elif service_name == "auto":
+                from castorice.agent.autonomous_loop import AutonomousLoop
+                service = AutonomousLoop(self)
+                self._bg_services["auto"] = service
+                thread = threading.Thread(target=service.run, daemon=True, name="AutonomousLoop")
+                thread.start()
+                self._bg_threads["auto"] = thread
+                self.logger.info("自主循环已在后台启动")
+                return True
+            elif service_name == "consciousness":
+                from castorice.agent.consciousness import ConsciousnessEngine
+                service = ConsciousnessEngine(self)
+                self._bg_services["consciousness"] = service
+                self.consciousness = service
+                if hasattr(self, "agent") and self.agent:
+                    self.agent.consciousness = service
+                thread = threading.Thread(target=service.run, daemon=True, name="ConsciousnessEngine")
+                thread.start()
+                self._bg_threads["consciousness"] = thread
+                self.logger.info("意识引擎已在后台启动")
                 return True
             else:
                 self.logger.warning(f"未知服务: {service_name}")
@@ -355,7 +497,7 @@ __plugin_info__ = {
     def get_service_status(self) -> Dict[str, Any]:
         """获取所有后台服务状态"""
         status = {}
-        for name in ["qq", "http", "cron"]:
+        for name in ["qq", "http", "cron", "auto", "consciousness"]:
             service = self._bg_services.get(name)
             if service and hasattr(service, 'is_running') and callable(service.is_running):
                 running = service.is_running()

@@ -220,6 +220,11 @@ class ConversationImporter:
 _conversation_importer = None
 
 
+
+def set_conversation_importer(instance: ConversationImporter) -> None:
+    """手动设置全局 ConversationImporter 实例（Agent 初始化时调用，确保配置生效）"""
+    global _conversation_importer
+    _conversation_importer = instance
 def get_conversation_importer() -> ConversationImporter:
     """获取全局对话导入器单例"""
     global _conversation_importer

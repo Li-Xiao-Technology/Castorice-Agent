@@ -188,6 +188,11 @@ class PluginManager:
 _plugin_manager = None
 
 
+
+def set_plugin_manager(instance: PluginManager) -> None:
+    """手动设置全局 PluginManager 实例（Agent 初始化时调用，确保配置生效）"""
+    global _plugin_manager
+    _plugin_manager = instance
 def get_plugin_manager() -> PluginManager:
     """获取全局插件管理器单例"""
     global _plugin_manager

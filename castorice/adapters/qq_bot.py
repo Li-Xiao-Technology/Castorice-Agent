@@ -112,6 +112,7 @@ class QQBotAdapter:
         self._token_expires_at: float = 0
         self._ws = None
         self._running = False
+        self._authenticated = False
         self._session_id: Optional[str] = None
         self._seq: int = 0
         self._heartbeat_interval: float = 30
@@ -132,6 +133,7 @@ class QQBotAdapter:
         return {
             "running": self._running,
             "connected": self._is_ws_open(),
+            "authenticated": self._authenticated,
             "session_id": self._session_id,
             "seq": self._seq,
             "intent": self.config.intent,
@@ -470,13 +472,22 @@ class QQBotAdapter:
                     "msg_type": 0,  # 文本消息类型（QQ API 必填字段）
                     "msg_seq": _next_msg_seq(),  # 模块级单调递增
                 }
-                if msg_id:
+                # 仅在首次尝试且 msg_id 有效时传 msg_id
+                # msg_id 有效期很短（约 2 分钟），过期后不传直接发送更可靠
+                if msg_id and attempt == 0:
                     payload["msg_id"] = msg_id
                 resp = await self._http_client.post(
-                    f"/groups/{group_id}/messages",
+                    f"/v2/groups/{group_id}/messages",
                     headers=headers,
                     json=payload,
                 )
+                if resp.status_code != 200:
+                    resp_body = resp.text
+                    logger.warning(f"发送群消息 HTTP {resp.status_code}: body={resp_body[:500]}, payload={json.dumps(payload, ensure_ascii=False)[:300]}")
+                    # 如果是 msg_id 过期错误，下次重试不带 msg_id
+                    if "msg_id已过期" in resp_body and "msg_id" in payload:
+                        msg_id = None
+                        logger.info("检测到 msg_id 过期，下次重试将不带 msg_id")
                 resp.raise_for_status()
                 logger.info(f"发送群消息成功: group_id={group_id}, length={len(content)}")
                 return resp.json()
@@ -511,6 +522,17 @@ class QQBotAdapter:
             event_type = event_data.get("t", "")
             d = event_data.get("d", {})
 
+            # 调试日志：打印关键字段
+            logger.info(
+                f"[_handle_message_event] type={event_type}, "
+                f"content={d.get('content', '')[:80]!r}, "
+                f"group_id={d.get('group_id', '')!r}, "
+                f"user_id={d.get('user_id', '')!r}, "
+                f"openid={d.get('openid', '')!r}, "
+                f"author.id={d.get('author', {}).get('id', '')!r}, "
+                f"keys={list(d.keys())}"
+            )
+
             # 提取消息内容
             content = d.get("content", "").strip()
             if not content:
@@ -527,19 +549,76 @@ class QQBotAdapter:
             user_id = d.get("user_id", "") or d.get("openid", "") or author_id
 
             # 消息鉴权（白名单检查）
+            # C2C 消息拿到的是 openid（32位十六进制），不是 QQ号（纯数字）
+            # 白名单同时支持两种格式：QQ号（纯数字）和 openid（32位十六进制）
             allowed_users = self.config.allowed_users
             allowed_groups = self.config.allowed_groups
 
             # 检查用户白名单
             if allowed_users:
+                is_openid = user_id and not user_id.isdigit() and len(user_id) == 32
                 if user_id not in allowed_users:
-                    logger.debug(f"用户不在白名单中，跳过: user_id={user_id}")
-                    return
+                    # C2C/群消息：如果是 openid 格式且白名单里没有匹配的 openid，
+                    # 但白名单里全是 QQ号（纯数字），则暂时放行并打警告日志
+                    # （因为我们没法把 openid 转成 QQ号做比对）
+                    is_c2c_or_group = event_type in (
+                        "C2C_MESSAGE_CREATE",
+                        "GROUP_MESSAGE", "GROUP_MESSAGE_CREATE", "GROUP_AT_MESSAGE_CREATE",
+                    )
+                    if is_c2c_or_group and is_openid:
+                        all_qq_nums = all(u.isdigit() for u in allowed_users)
+                        if all_qq_nums:
+                            msg_type = event_type.replace("_MESSAGE_CREATE", "").replace("_AT", "")
+                            logger.warning(
+                                f"[{msg_type}] openid 无法匹配白名单中的 QQ号，暂时放行: "
+                                f"openid={user_id[:16]}..., 白名单QQ号={allowed_users}"
+                            )
+                        else:
+                            logger.debug(f"用户不在白名单中，跳过: user_id={user_id}")
+                            return
+                    else:
+                        logger.debug(f"用户不在白名单中，跳过: user_id={user_id}")
+                        return
 
             # 检查群组白名单（仅对群消息生效）
             if allowed_groups and group_id:
+                is_group_openid = group_id and not group_id.isdigit() and len(group_id) >= 16
                 if group_id not in allowed_groups:
-                    logger.debug(f"群不在白名单中，跳过: group_id={group_id}")
+                    # 群消息：如果是 openid 格式且白名单里没有匹配的 openid，
+                    # 但白名单里全是群号（纯数字），则暂时放行并打警告日志
+                    if is_group_openid:
+                        all_group_nums = all(g.isdigit() for g in allowed_groups)
+                        if all_group_nums:
+                            logger.warning(
+                                f"[GROUP] group_openid 无法匹配白名单中的群号，暂时放行: "
+                                f"group_id={group_id[:16]}..., 白名单群号={allowed_groups}"
+                            )
+                        else:
+                            logger.debug(f"群不在白名单中，跳过: group_id={group_id}")
+                            return
+                    else:
+                        logger.debug(f"群不在白名单中，跳过: group_id={group_id}")
+                        return
+
+            # 群消息：只回复 @机器人 的消息
+            is_group_msg = event_type in (
+                "GROUP_MESSAGE", "GROUP_MESSAGE_CREATE", "GROUP_AT_MESSAGE_CREATE",
+            )
+            if is_group_msg:
+                mentions = d.get("mentions", [])
+                content_has_at = "<@" in content
+                if not mentions and not content_has_at:
+                    logger.info(f"群消息未 @机器人，跳过: content={content[:50]}")
+                    return
+                # 清理 content 中的 <@...> 标签，避免影响 LLM 理解
+                import re
+                cleaned = re.sub(r"<@[0-9A-Fa-f]+>", "", content).strip()
+                cleaned = re.sub(r"\s+", " ", cleaned)
+                if cleaned != content:
+                    logger.info(f"清理 @标签: {content[:60]!r} -> {cleaned[:60]!r}")
+                    content = cleaned
+                if not content:
+                    logger.debug("清理后内容为空，跳过")
                     return
 
             # 消息去重
@@ -555,7 +634,7 @@ class QQBotAdapter:
                 message_type = "channel"  # 频道消息（含@消息）
             elif event_type == "DIRECT_MESSAGE_CREATE":
                 message_type = "direct"  # 频道私信
-            elif event_type in ("GROUP_MESSAGE", "GROUP_AT_MESSAGE_CREATE"):
+            elif event_type in ("GROUP_MESSAGE", "GROUP_MESSAGE_CREATE", "GROUP_AT_MESSAGE_CREATE"):
                 message_type = "group"  # 群消息（含@消息）
             elif event_type == "C2C_MESSAGE_CREATE":
                 message_type = "c2c"  # C2C 消息
@@ -577,16 +656,16 @@ class QQBotAdapter:
             # 在线程池中调用消息处理函数（避免阻塞 asyncio 事件循环）
             # message_handler 是同步函数，内部会调用 LLM API，可能耗时数秒
             try:
-                logger.debug(f"在线程池中调用消息处理函数，content={content[:50]}")
+                logger.info(f"在线程池中调用消息处理函数，content={content[:50]}")
                 reply = await asyncio.to_thread(self._message_handler, content, context)
-                logger.debug(f"消息处理完成，reply_length={len(reply) if reply else 0}")
+                logger.info(f"消息处理完成，reply_length={len(reply) if reply else 0}, reply_preview={reply[:80] if reply else 'None'!r}")
             except Exception as e:
                 logger.error(f"消息处理函数执行失败: {e}", exc_info=True)
                 reply = "抱歉，处理消息时出错了"
 
             # 回复消息
             if reply:
-                logger.debug(f"准备回复消息，type={message_type}")
+                logger.info(f"准备回复消息，type={message_type}, group_id={group_id!r}, user_id={user_id!r}, msg_id={message_id!r}")
                 if message_type == "channel" and channel_id:
                     await self.send_channel_message(channel_id, reply)
                 elif message_type == "direct" and guild_id:
@@ -743,6 +822,7 @@ class QQBotAdapter:
 
             if event_type in ("READY", "RESUMED"):
                 self._session_id = event_data.get("session_id", "")
+                self._authenticated = True
                 if event_type == "RESUMED":
                     logger.info(f"会话已恢复: session_id={self._session_id}, seq={self._seq}")
                 else:
@@ -755,7 +835,7 @@ class QQBotAdapter:
                     if shard:
                         logger.info(f"分片信息: {shard}")
             elif event_type in ("MESSAGE_CREATE", "AT_MESSAGE_CREATE", "DIRECT_MESSAGE_CREATE",
-                                "C2C_MESSAGE_CREATE", "GROUP_MESSAGE", "GROUP_AT_MESSAGE_CREATE"):
+                                "C2C_MESSAGE_CREATE", "GROUP_MESSAGE", "GROUP_MESSAGE_CREATE", "GROUP_AT_MESSAGE_CREATE"):
                 logger.info(f"收到消息事件: {event_type}, seq={seq}")
                 await self._handle_message_event(data)
             else:
@@ -776,6 +856,7 @@ class QQBotAdapter:
 
         elif op == 9:  # Invalid Session - 需要重新鉴权
             logger.error("无效会话，需要重新鉴权")
+            self._authenticated = False
             # 清除 session_id，下次连接使用全新鉴权
             self._session_id = None
             self._seq = 0
@@ -820,10 +901,17 @@ class QQBotAdapter:
     # ============================================================
     async def start(self) -> None:
         """启动机器人（异步，带自动重连）"""
+        # 安全检查：白名单为空时拒绝启动，避免任何人/群均可交互
+        allowed_users = self.config.allowed_users or []
+        allowed_groups = self.config.allowed_groups or []
+        if not allowed_users and not allowed_groups:
+            logger.error("[QQ Bot] 安全警告：allowed_users 和 allowed_groups 均为空，拒绝启动。请在配置中设置白名单。")
+            raise ValueError("QQ Bot 启动需要配置 allowed_users 或 allowed_groups 白名单")
+
         logger.info("正在启动 QQ 机器人...")
         logger.info(f"Intent 配置: {self.config.intent}")
         logger.info(f"Intent 含义: AT_MESSAGE={bool(self.config.intent & QQBotConfig.INTENT_AT_MESSAGE)}, DIRECT_MESSAGE={bool(self.config.intent & QQBotConfig.INTENT_DIRECT_MESSAGE)}, C2C_MESSAGE={bool(self.config.intent & QQBotConfig.INTENT_C2C_MESSAGE)}, GROUP_MESSAGE={bool(self.config.intent & QQBotConfig.INTENT_GROUP_MESSAGE)}")
-        
+
         self._running = True
         try:
             await self._connect_with_reconnect()

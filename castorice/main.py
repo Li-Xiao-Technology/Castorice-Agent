@@ -100,6 +100,13 @@ def main():
                         help="批量模式的输入文件路径")
     args = parser.parse_args()
 
+    # 初始化日志（确保有文件输出）
+    try:
+        from castorice.config import get_config
+        setup_logging(get_config().raw())
+    except Exception:
+        setup_logging()
+
     from castorice.server import CastoriceEngine
 
     engine = CastoriceEngine()

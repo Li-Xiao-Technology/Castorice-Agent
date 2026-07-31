@@ -30,6 +30,7 @@ def _get_audit_logger():
             from castorice.security.audit_log import get_audit_logger as _get
             _audit_logger = _get()
         except Exception:
+            logger.debug(f"静默异常 [castorice/agent/common.py:32]")
             return None
     return _audit_logger
 
@@ -42,5 +43,6 @@ def _get_alert_manager():
             from castorice.alerts import get_alert_manager as _get
             _alert_manager_ref = _get()
         except Exception:
+            logger.debug(f"静默异常 [castorice/agent/common.py:45]")
             return None
     return _alert_manager_ref

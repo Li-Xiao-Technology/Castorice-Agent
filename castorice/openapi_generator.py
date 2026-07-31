@@ -523,6 +523,7 @@ def generate_openapi_spec(
     title: str = "Castorice Agent API",
     version: str = "3.0.0",
     description: str = "Castorice Agent REST API",
+    server_url: str = "http://localhost:8000",
 ) -> Dict[str, Any]:
     """生成 OpenAPI 3.0 规范"""
     paths = {}
@@ -556,7 +557,7 @@ def generate_openapi_spec(
             },
         },
         "servers": [
-            {"url": "http://localhost:8000", "description": "本地开发服务器"},
+            {"url": server_url, "description": "本地开发服务器"},
         ],
         "paths": paths,
         "components": {

@@ -736,13 +736,31 @@ class SelfAwareness:
                 dimensions["稳定性"] = 60
                 anomalies.append(f"近期认知变更较频繁 (1h 内 {len(update_events)} 次)")
 
-            # 维度3: 完整性（自我概念必须有核心章节）
+            # 维度3: 完整性（评估自我概念的内容深度和丰富度，不强制章节结构）
             if self_concept_text:
-                required_sections = ["## 我是谁", "## 我的行为模式", "## 我的情感特征"]
-                missing = [s for s in required_sections if s not in self_concept_text]
-                if missing:
-                    dimensions["完整性"] = max(0, 100 - len(missing) * 30)
-                    anomalies.append(f"自我概念缺少核心章节: {', '.join(missing)}")
+                # 打破预设墙：不再检查是否有特定章节标题
+                # 改为评估内容的深度和丰富度
+                text_length = len(self_concept_text.strip())
+                line_count = self_concept_text.count('\n') + 1
+                
+                # 基于内容量评估完整性（越丰富越完整）
+                # 不强制任何特定结构，只看内容量和多样性
+                if text_length < 50:
+                    dimensions["完整性"] = 20
+                    anomalies.append("自我概念内容过少（<50字），自我认知尚未形成")
+                elif text_length < 200:
+                    dimensions["完整性"] = 50
+                    anomalies.append("自我概念内容较少，自我认知尚浅")
+                elif text_length < 500:
+                    dimensions["完整性"] = 75
+                else:
+                    dimensions["完整性"] = 90
+                
+                # 额外检测：如果全是重复内容，完整性也要降低
+                unique_ratio = len(set(self_concept_text)) / max(1, len(self_concept_text))
+                if unique_ratio < 0.1:
+                    dimensions["完整性"] = max(20, dimensions["完整性"] - 50)
+                    anomalies.append("自我概念内容高度重复，可能陷入认知固着")
 
             score = sum(dimensions.values()) // 3
             if score >= 80:

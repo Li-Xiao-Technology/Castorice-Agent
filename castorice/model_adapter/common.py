@@ -32,6 +32,7 @@ class ChatMessage:
         tool_call_id: Optional[str] = None,
         name: Optional[str] = None,
         image_urls: Optional[List[str]] = None,
+        cacheable: bool = False,
     ):
         self.role = role
         self.content = content
@@ -39,6 +40,9 @@ class ChatMessage:
         self.tool_call_id = tool_call_id
         self.name = name
         self.image_urls = image_urls or []
+        # P1-1: Provider 级 prompt caching 标记
+        # 标记为 cacheable 的消息（通常是 system 消息）会被 provider 自动缓存
+        self.cacheable = cacheable
 
     def to_dict(self) -> Dict[str, Any]:
         d: Dict[str, Any] = {"role": self.role}

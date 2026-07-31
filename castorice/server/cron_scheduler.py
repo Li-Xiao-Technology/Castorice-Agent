@@ -3,9 +3,20 @@ CronScheduler - 定时任务调度器
 
 执行定期任务，如自我反思、记忆清理等。
 """
+import asyncio
 import logging
 import threading
 import time
+
+
+def _run_async(coro):
+    """在共享事件循环中运行协程，避免每次创建新循环导致 async 资源绑定失败。"""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop.run_until_complete(coro)
 
 
 class CronScheduler:
@@ -20,6 +31,7 @@ class CronScheduler:
         self._error = None
         self._reflect_interval = 3600
         self._cleanup_interval = 86400
+        self._stop_event = threading.Event()
 
     def is_running(self) -> bool:
         """检查调度器是否正在运行"""
@@ -38,6 +50,7 @@ class CronScheduler:
     def run(self) -> None:
         """启动定时任务调度器（阻塞模式，由调用方在后台线程中运行）"""
         self._running = True
+        self._stop_event.clear()
         try:
             cron_cfg = self.engine.config.cron if hasattr(self.engine.config, "cron") else {}
             if isinstance(cron_cfg, dict):
@@ -75,7 +88,9 @@ class CronScheduler:
                     self._run_daily_cleanup()
                     last_cleanup_time = current_time
 
-                time.sleep(60)
+                # 用 Event.wait 替代 time.sleep，stop() 时可立即唤醒退出
+                if self._stop_event.wait(60):
+                    break
             except Exception as e:
                 self.logger.error(f"定时任务执行失败: {e}")
 
@@ -84,8 +99,7 @@ class CronScheduler:
         try:
             engine = getattr(self.engine.agent, "reflection_engine", None)
             if engine:
-                import asyncio
-                result = asyncio.run(engine.reflect(trigger_reason="定时触发"))
+                result = _run_async(engine.reflect(trigger_reason="定时触发"))
                 if result.self_concept_updated:
                     self.logger.info(f"定时反思完成，自我概念已更新")
                 else:
@@ -106,4 +120,5 @@ class CronScheduler:
     def stop(self) -> None:
         """停止定时任务调度器"""
         self._running = False
+        self._stop_event.set()
         self.logger.info("定时任务调度器已停止")

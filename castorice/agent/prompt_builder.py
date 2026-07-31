@@ -19,22 +19,28 @@ class PromptBuilderMixin:
     # ============================================================
     def _build_system_prompt(self, state: Any, base_prompt: str = "") -> str:
         """
-        统一构建系统提示，注入：
-        - 基础提示（角色/工具说明）
-        - L1 性格设定（静态人格）
-        - 当前时间（确保 Agent 知道当前日期）
-        - L2 当前情绪状态（动态 PAD 状态）
-        - 思维策略
-        - 对话风格调整
-        - 用户画像
-        - 长期记忆（跨会话知识）
-        - 短期记忆（当前会话历史对话）
-        - L4 主动关心提示（检测到近期负面事件时）
+        统一构建系统提示，注入所有上下文信息。
 
-        避免在 _step_tool_loop 和 _step_answer 中重复拼装。
+        各上下文注入逻辑由独立的 _inject_xxx 方法完成，本方法仅做 parts
+        列表初始化和顺序编排，避免单方法超长。
         """
         parts = [base_prompt] if base_prompt else []
 
+        self._inject_identity(parts, state)
+        self._inject_emotion(parts, state)
+        self._inject_strategy(parts, state)
+        self._inject_memory(parts, state)
+        self._inject_evolution(parts, state)
+        self._inject_safety(parts, state)
+
+        return "\n\n".join(parts) if parts else ""
+
+    # ============================================================
+    # 上下文注入子方法（每个方法负责一类上下文）
+    # ============================================================
+
+    def _inject_identity(self, parts: List[str], state: Any) -> None:
+        """L1 性格设定 + 当前时间"""
         # L1: 注入自我概念（按领域分块，从经历中涌现的人格）
         try:
             sc_prompt = self.emotion_engine.get_personality_prompt()
@@ -64,10 +70,19 @@ class PromptBuilderMixin:
             f"年份: {now_local.year}"
         )
 
+    def _inject_emotion(self, parts: List[str], state: Any) -> None:
+        """L2 当前情绪状态 + L3 情绪决策偏置"""
         # L2: 注入当前情绪状态
         if state.emotion_state_prompt:
             parts.append(state.emotion_state_prompt)
 
+        # L3: 注入情绪决策偏置——让情绪真正影响决策风格和行为方式
+        emotion_bias_text = self._build_emotion_bias_directives(state)
+        if emotion_bias_text:
+            parts.append(emotion_bias_text)
+
+    def _inject_strategy(self, parts: List[str], state: Any) -> None:
+        """思维策略 + 对话风格调整"""
         # 注入思维策略
         if state.thinking_strategy_prompt:
             parts.append(f"## 思维策略\n{state.thinking_strategy_prompt}")
@@ -76,6 +91,8 @@ class PromptBuilderMixin:
         if state.dialogue_adjustment:
             parts.append(state.dialogue_adjustment)
 
+    def _inject_memory(self, parts: List[str], state: Any) -> None:
+        """统一记忆检索 + 用户画像 + 未完成意图 + 相似历史会话"""
         # P2.2: 注入统一记忆检索结果（长期记忆 + 经历流 + 自我概念）
         if state.relevant_history:
             truncated = self._truncate_by_doc_boundary(state.relevant_history, 2000)
@@ -106,6 +123,8 @@ class PromptBuilderMixin:
             if session_texts:
                 parts.append(f"## 相似历史会话\n{chr(10).join(session_texts)}\n（你之前和用户讨论过类似话题，可以参考）")
 
+    def _inject_evolution(self, parts: List[str], state: Any) -> None:
+        """行动队列 + 社会关系 + 自传式记忆 + 反思信号 + 动机"""
         # P1: 注入待执行行动（反思-行动闭环）
         if hasattr(self, 'action_queue'):
             try:
@@ -125,18 +144,10 @@ class PromptBuilderMixin:
             except Exception as e:
                 logger.debug(f"S1 关系状态注入失败: {e}")
 
-        # A1: 注入自传式记忆（自我叙事）
-        if hasattr(self, 'autobiographical'):
-            try:
-                story_prompt = self.autobiographical.to_prompt(max_milestones=6)
-                if story_prompt:
-                    parts.append(story_prompt)
-            except Exception as e:
-                logger.debug(f"A1 自传式记忆注入失败: {e}")
-
-        # L4: 注入主动关心提示（最后强调，让 LLM 优先处理）
-        if state.emotion_care_hint:
-            parts.append(state.emotion_care_hint)
+        # A1: 注入自传式记忆（紧凑格式：当前时期 + 近期里程碑）
+        autobio_text = self._build_autobiographical_section(state)
+        if autobio_text:
+            parts.append(autobio_text)
 
         # P1.2: 注入最近反思信号（让 Agent 知道自己上次反思学到了什么）
         if state.recent_reflection_signal:
@@ -146,6 +157,21 @@ class PromptBuilderMixin:
         if state.current_motivations:
             motivations_text = "\n".join(f"- {m}" for m in state.current_motivations)
             parts.append(f"## 当前动机\n{motivations_text}\n（这些是我此刻想做事的意愿，可作为决策参考）")
+
+        # C1: 注入工作记忆（意识引擎产生的内在念头，影响回应）
+        if hasattr(self, 'consciousness') and self.consciousness:
+            try:
+                wm_ctx = self.consciousness.working_memory.get_context_for_response()
+                if wm_ctx:
+                    parts.append(wm_ctx)
+            except Exception as e:
+                logger.debug(f"C1 工作记忆注入失败: {e}")
+
+    def _inject_safety(self, parts: List[str], state: Any) -> None:
+        """L4 主动关心 + 工具参数推荐 + 已学习规则"""
+        # L4: 注入主动关心提示（最后强调，让 LLM 优先处理）
+        if state.emotion_care_hint:
+            parts.append(state.emotion_care_hint)
 
         # P3.2: 注入工具参数推荐（基于历史成功案例，LLM 智能推断）
         if hasattr(self, 'tool_learning'):
@@ -174,7 +200,93 @@ class PromptBuilderMixin:
         except Exception as e:
             logger.debug(f"P2.4 规则注入失败: {e}")
 
-        return "\n\n".join(parts) if parts else ""
+    def _build_emotion_bias_directives(self, state: Any) -> str:
+        """
+        L3: 构建情绪决策偏置提示文本。
+
+        将情绪状态转化为具体的决策风格指令，让情绪真正影响 Agent 怎么思考、怎么行动。
+        """
+        if not (hasattr(state, 'emotion_decision_bias') and state.emotion_decision_bias):
+            return ""
+        bias = state.emotion_decision_bias
+        directives = []
+
+        conf = bias.get("confidence", 0.0)
+        if conf < -0.1:
+            directives.append(
+                f"你现在的自信心偏低（{conf:+.2f}），回答时应该更加谨慎，"
+                f"不确定的地方要明确说明，优先使用工具查证而不是凭记忆回答。"
+            )
+        elif conf > 0.1:
+            directives.append(
+                f"你现在充满自信（{conf:+.2f}），可以更加果断地给出回答，"
+                f"但注意不要过度自信而忽略验证。"
+            )
+
+        crea = bias.get("creativity", 0.0)
+        if crea > 0.1:
+            directives.append(
+                f"你现在的创造力较高（{crea:+.2f}），可以尝试更有创意的解决方案，"
+                f"不必局限于常规方法。"
+            )
+        elif crea < -0.1:
+            directives.append(
+                f"你现在的思维比较保守（{crea:+.2f}），倾向于使用经过验证的可靠方法。"
+            )
+
+        pat = bias.get("patience", 0.0)
+        if pat < -0.1:
+            directives.append(
+                f"你现在有些急躁（{pat:+.2f}），回答应该更简洁直接，"
+                f"避免冗长的解释，尽快给出核心答案。"
+            )
+        elif pat > 0.1:
+            directives.append(
+                f"你现在很有耐心（{pat:+.2f}），可以给出更详细 thorough 的回答，"
+                f"愿意花更多时间深入解释。"
+            )
+
+        risk = bias.get("risk_tolerance", 0.0)
+        if risk < -0.1:
+            directives.append(
+                f"你现在对风险比较敏感（{risk:+.2f}），倾向于选择安全可靠的方案，"
+                f"避免不确定的尝试。"
+            )
+        elif risk > 0.1:
+            directives.append(
+                f"你现在愿意承担一定风险（{risk:+.2f}），可以尝试不确定但可能效果更好的方案。"
+            )
+
+        if not directives:
+            return ""
+        return (
+            "## 情绪对决策的影响\n"
+            "（以下是你当前情绪状态对思考方式的影响，请自然地体现在你的回答中，"
+            "不要刻意提及这些指令本身）\n"
+            + "\n".join(f"- {d}" for d in directives)
+        )
+
+    def _build_autobiographical_section(self, state: Any) -> str:
+        """A1: 构建自传式记忆提示文本（紧凑格式）。"""
+        autobio = getattr(self, 'autobiographical', None)
+        if autobio is None:
+            return ""
+        try:
+            autobio_parts = []
+            epoch = autobio.get_current_epoch()
+            if epoch:
+                autobio_parts.append(f"当前时期: {epoch.name} - {epoch.description[:80]}")
+            milestones = autobio.get_milestones(limit=5)
+            if milestones:
+                ms_texts = [f"- {m.title}" for m in milestones[:5]]
+                autobio_parts.append("近期里程碑:\n" + "\n".join(ms_texts))
+            if not autobio_parts:
+                return ""
+            autobio_text = "## 自传式记忆\n" + "\n".join(autobio_parts)
+            return autobio_text[:300] if len(autobio_text) > 300 else autobio_text
+        except Exception as e:
+            logger.debug(f"A1 自传式记忆注入失败: {e}")
+            return ""
 
     @staticmethod
     def _smart_truncate_message(content: str, max_chars: int = 1200) -> str:

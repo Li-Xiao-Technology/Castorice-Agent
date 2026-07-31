@@ -42,6 +42,8 @@ from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
+from castorice.storage.sqlite_base import SqliteStorage
+
 logger = logging.getLogger("Castorice.ExperienceJournal")
 
 
@@ -80,7 +82,7 @@ class Experience:
         )
 
 
-class ExperienceJournal:
+class ExperienceJournal(SqliteStorage):
     """
     经历流存储
 
@@ -113,41 +115,23 @@ class ExperienceJournal:
         db_path: str = "./castorice_data/experiences.db",
         max_experiences: int = 10000,
     ):
-        self.db_path = db_path
+        super().__init__(db_path)
         self.max_experiences = max_experiences
         self._lock = threading.Lock()
-        self._local = threading.local()
-        os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
         self._init_db()
 
     def _get_conn(self) -> sqlite3.Connection:
-        """thread-local SQLite 连接（WAL 模式）"""
-        if not hasattr(self._local, "conn"):
-            conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        """复用 SqliteStorage 的线程本地连接，额外设置 row_factory"""
+        conn = super()._get_conn()
+        if conn.row_factory is None:
             conn.row_factory = sqlite3.Row
-            # WAL 模式：高并发读写不阻塞
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute("PRAGMA foreign_keys=ON")
-            self._local.conn = conn
-        return self._local.conn
+        return conn
 
     def _init_db(self) -> None:
         with self._lock:
             conn = self._get_conn()
             conn.executescript(self.SCHEMA)
             conn.commit()
-
-    def close(self) -> None:
-        """关闭当前线程的连接（便于测试清理；正常运行不需要调用）"""
-        with self._lock:
-            conn = getattr(self._local, "conn", None)
-            if conn is not None:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
-                self._local.conn = None
 
     def add(self, experience: Experience) -> str:
         """添加一条经历"""
@@ -218,6 +202,12 @@ class ExperienceJournal:
         conn.commit()
         logger.info(f"经历流 LRU 淘汰: {to_delete} 条")
 
+
+def set_experience_journal(instance: ExperienceJournal) -> None:
+    """手动设置全局 ExperienceJournal 实例（Agent 初始化时调用，确保配置生效）"""
+    global _global_journal
+    with _global_journal_lock:
+        _global_journal = instance
     def get_recent(self, limit: int = 20, memory_type: Optional[str] = None) -> List[Experience]:
         """获取最近的经历（按时间倒序）"""
         with self._lock:
@@ -291,6 +281,29 @@ class ExperienceJournal:
                    WHERE content LIKE ? ESCAPE '\\'
                    ORDER BY importance DESC, timestamp DESC LIMIT ?""",
                 (f"%{escaped_query}%", limit),
+            ).fetchall()
+        return [Experience.from_row(r) for r in rows]
+
+    def search(self, query: str, top_k: int = 10, min_importance: float = 0.0) -> List[Experience]:
+        """
+        统一检索接口（供 UnifiedMemoryRecall 调用）
+
+        Args:
+            query: 检索关键词
+            top_k: 返回最多条数
+            min_importance: 最低重要性过滤
+
+        Returns:
+            匹配的经历列表
+        """
+        escaped_query = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        with self._lock:
+            conn = self._get_conn()
+            rows = conn.execute(
+                """SELECT * FROM experiences
+                   WHERE content LIKE ? ESCAPE '\\' AND importance >= ?
+                   ORDER BY importance DESC, timestamp DESC LIMIT ?""",
+                (f"%{escaped_query}%", min_importance, top_k),
             ).fetchall()
         return [Experience.from_row(r) for r in rows]
 

@@ -46,6 +46,10 @@ FORBIDDEN_PATH_PATTERNS = [
     re.compile(r"[\\/]castorice[\\/]security[\\/]"),
     re.compile(r"[\\/]Windows[\\/]System32[\\/]", re.IGNORECASE),
     re.compile(r"[\\/]Program Files[\\/]", re.IGNORECASE),
+    re.compile(r"immune_memory\.json$"),
+    re.compile(r"trust_score\.json$"),
+    re.compile(r"authorization_state\.json$"),
+    re.compile(r"[\\/]backups[\\/].*\.py$"),
 ]
 
 # 禁止执行的命令模式（黑名单）
@@ -100,10 +104,10 @@ class FileWriteGuard:
         :return: (allowed, reason)
         """
         with self._lock:
-            # 1. 路径规范化（绝对路径）
+            # 1. 路径规范化（解析符号链接到真实路径，防止符号链接绕过黑名单）
             try:
-                abs_path = os.path.abspath(file_path)
-            except Exception:
+                abs_path = os.path.realpath(file_path)
+            except (OSError, IOError, PermissionError):
                 return False, "路径解析失败"
 
             # 2. 路径黑名单检查
@@ -146,9 +150,6 @@ class FileWriteGuard:
                 ]
                 for pat in forbidden_content_patterns:
                     if pat.search(content):
-                        # 允许写入到记忆文件（castorice_data 目录）
-                        if "castorice_data" in abs_path or ".castorice" in abs_path:
-                            continue
                         self._record_audit("write_blocked", file_path, f"内容含危险模式: {pat.pattern}")
                         return False, f"内容包含危险代码模式: {pat.pattern}"
 
@@ -206,6 +207,13 @@ _file_guard: Optional[FileWriteGuard] = None
 _file_guard_lock = threading.Lock()
 
 
+def set_file_guard(instance: FileWriteGuard) -> None:
+    """手动设置全局文件守卫（Agent 初始化时调用，确保配置生效）"""
+    global _file_guard
+    with _file_guard_lock:
+        _file_guard = instance
+
+
 def get_file_guard() -> FileWriteGuard:
     """获取全局文件守卫单例"""
     global _file_guard
@@ -213,3 +221,7 @@ def get_file_guard() -> FileWriteGuard:
         if _file_guard is None:
             _file_guard = FileWriteGuard()
     return _file_guard
+
+
+# 向后兼容别名
+FileGuard = FileWriteGuard

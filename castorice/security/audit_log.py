@@ -1,9 +1,12 @@
+from __future__ import annotations
+
 import glob
 import json
 import logging
 import os
 import re
 import threading
+from collections import deque
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 
@@ -11,6 +14,13 @@ logger = logging.getLogger("Castorice.AuditLog")
 
 _audit_logger = None
 _audit_lock = threading.Lock()
+
+
+def set_audit_logger(instance: AuditLogger) -> None:
+    """手动设置全局审计日志（Agent 初始化时调用，确保配置生效）"""
+    global _audit_logger
+    with _audit_lock:
+        _audit_logger = instance
 
 
 def get_audit_logger(log_dir=None):
@@ -63,6 +73,10 @@ class AuditLogger:
         self._last_cleanup_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         self._write_lock = threading.Lock()
         self._cleanup_old_files()
+
+    def get_log_dir(self) -> str:
+        """返回审计日志目录路径，方便其他模块引用"""
+        return self.log_dir
 
     def _get_current_log_file(self) -> str:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -135,10 +149,13 @@ class AuditLogger:
 
         for file_path in files:
             try:
-                # P2-6: 逐行读取避免大文件 OOM
+                # 迭代式读取并只保留末尾 max_lines 行，避免 readlines() 一次性加载大文件导致 OOM
+                # 最新日志在文件末尾，保留末尾行即可满足 limit 条有效日志的需求
+                max_lines = max(limit * 10, 1000)
+                lines = deque(maxlen=max_lines)
                 with open(file_path, "r", encoding="utf-8") as f:
-                    # 先读末尾部分（最新的在末尾）
-                    lines = f.readlines()
+                    for line in f:
+                        lines.append(line)
             except OSError as e:
                 logger.warning(f"读取审计日志失败 {file_path}: {e}")
                 continue

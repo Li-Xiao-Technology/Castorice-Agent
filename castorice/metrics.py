@@ -1,131 +1,228 @@
 """
-Prometheus 指标导出模块
+Castorice Agent - 监控指标
 
-提供标准 Prometheus 格式的指标输出，支持：
-- LLM 调用统计
-- Token 使用量
-- 工具调用统计
-- 会话统计
-- 系统状态
+提供：
+- 请求计数
+- 延迟统计
+- 错误率
+- 缓存命中率
+- Token 用量
+
+兼容 prometheus_client（可选）
 """
 
-import logging
+import threading
 import time
-from typing import Dict, Optional
+from collections import defaultdict
+from threading import Lock
+from typing import Any, Dict, Optional
 
-logger = logging.getLogger("Castorice.Metrics")
+from .logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class MetricsCollector:
-    """Prometheus 指标收集器"""
-    
+    """
+    轻量级指标收集器
+
+    无需 prometheus_client 依赖，
+    提供基本统计和文本格式导出
+    """
+
     def __init__(self):
-        self._metrics = {
-            "castorice_llm_calls_total": {"type": "counter", "help": "Total LLM calls", "value": 0},
-            "castorice_llm_errors_total": {"type": "counter", "help": "Total LLM errors", "value": 0},
-            "castorice_llm_prompt_tokens_total": {"type": "counter", "help": "Total prompt tokens", "value": 0},
-            "castorice_llm_completion_tokens_total": {"type": "counter", "help": "Total completion tokens", "value": 0},
-            "castorice_llm_latency_seconds": {"type": "histogram", "help": "LLM latency in seconds", "buckets": [0.1, 0.5, 1.0, 2.0, 5.0, 10.0]},
-            "castorice_tool_calls_total": {"type": "counter", "help": "Total tool calls", "value": 0},
-            "castorice_tool_errors_total": {"type": "counter", "help": "Total tool errors", "value": 0},
-            "castorice_sessions_active": {"type": "gauge", "help": "Active sessions count", "value": 0},
-            "castorice_long_term_memory_count": {"type": "gauge", "help": "Long term memory count", "value": 0},
-            "castorice_requests_total": {"type": "counter", "help": "Total API requests", "value": 0},
-            "castorice_requests_4xx_total": {"type": "counter", "help": "Total 4xx requests", "value": 0},
-            "castorice_requests_5xx_total": {"type": "counter", "help": "Total 5xx requests", "value": 0},
-        }
-        self._latency_buckets = {b: 0 for b in [0.1, 0.5, 1.0, 2.0, 5.0, 10.0]}
-        self._latency_sum = 0.0
-        self._latency_count = 0
-        self._tool_calls_by_name = {}
-        self._start_time = time.time()
-    
-    def record_llm_call(self, prompt_tokens: int = 0, completion_tokens: int = 0, 
-                        error: bool = False, latency_ms: float = 0.0) -> None:
-        """记录 LLM 调用"""
-        self._metrics["castorice_llm_calls_total"]["value"] += 1
-        self._metrics["castorice_llm_prompt_tokens_total"]["value"] += prompt_tokens
-        self._metrics["castorice_llm_completion_tokens_total"]["value"] += completion_tokens
-        if error:
-            self._metrics["castorice_llm_errors_total"]["value"] += 1
-        if latency_ms > 0:
-            latency_s = latency_ms / 1000.0
-            self._latency_sum += latency_s
-            self._latency_count += 1
-            for bucket in self._latency_buckets:
-                if latency_s <= bucket:
-                    self._latency_buckets[bucket] += 1
-    
-    def record_tool_call(self, tool_name: str, error: bool = False) -> None:
-        """记录工具调用"""
-        self._metrics["castorice_tool_calls_total"]["value"] += 1
-        if error:
-            self._metrics["castorice_tool_errors_total"]["value"] += 1
-        self._tool_calls_by_name[tool_name] = self._tool_calls_by_name.get(tool_name, 0) + 1
-    
-    def record_request(self, status_code: int) -> None:
-        """记录 HTTP 请求"""
-        self._metrics["castorice_requests_total"]["value"] += 1
-        if 400 <= status_code < 500:
-            self._metrics["castorice_requests_4xx_total"]["value"] += 1
-        elif status_code >= 500:
-            self._metrics["castorice_requests_5xx_total"]["value"] += 1
-    
-    def set_sessions_count(self, count: int) -> None:
-        """设置活跃会话数"""
-        self._metrics["castorice_sessions_active"]["value"] = count
-    
-    def set_long_term_count(self, count: int) -> None:
-        """设置长期记忆条数"""
-        self._metrics["castorice_long_term_memory_count"]["value"] = count
-    
-    def generate_prometheus_output(self) -> str:
-        """生成 Prometheus 格式的指标输出"""
+        self._lock = Lock()
+        # 计数器
+        self._counters: Dict[str, int] = defaultdict(int)
+        # 延迟记录（最近 N 次）
+        self._latencies: Dict[str, list] = defaultdict(list)
+        self._max_latency_samples = 1000
+        # 错误记录
+        self._errors: Dict[str, int] = defaultdict(int)
+        # Token 用量
+        self._tokens: Dict[str, int] = defaultdict(int)
+        # Gauge 指标（如会话数、记忆条目数等可增可减的瞬时值）
+        self._gauges: Dict[str, float] = {}
+
+    def inc_counter(self, name: str, value: int = 1, **labels) -> None:
+        """递增计数器"""
+        key = self._make_key(name, labels)
+        with self._lock:
+            self._counters[key] += value
+
+    def record_latency(self, name: str, duration: float, **labels) -> None:
+        """记录延迟（秒）"""
+        key = self._make_key(name, labels)
+        with self._lock:
+            latencies = self._latencies[key]
+            latencies.append(duration)
+            # 限制样本数量
+            if len(latencies) > self._max_latency_samples:
+                latencies.pop(0)
+
+    def inc_error(self, name: str, **labels) -> None:
+        """记录错误"""
+        key = self._make_key(name, labels)
+        with self._lock:
+            self._errors[key] += 1
+
+    def add_tokens(self, name: str, count: int, **labels) -> None:
+        """记录 Token 用量"""
+        key = self._make_key(name, labels)
+        with self._lock:
+            self._tokens[key] += count
+
+    def _make_key(self, name: str, labels: Dict[str, Any]) -> str:
+        """生成指标 key"""
+        if labels:
+            label_str = ",".join(f"{k}={v}" for k, v in sorted(labels.items()))
+            return f"{name}{{{label_str}}}"
+        return name
+
+
+    def get_stats(self) -> Dict[str, Any]:
+        """获取所有统计"""
+        with self._lock:
+            stats = {
+                "counters": dict(self._counters),
+                "latencies": {},
+                "errors": dict(self._errors),
+                "tokens": dict(self._tokens),
+                "gauges": dict(self._gauges),
+            }
+
+            for key, samples in self._latencies.items():
+                if not samples:
+                    continue
+                sorted_samples = sorted(samples)
+                stats["latencies"][key] = {
+                    "count": len(samples),
+                    "avg": sum(samples) / len(samples),
+                    "min": min(samples),
+                    "max": max(samples),
+                    "p50": sorted_samples[len(sorted_samples) // 2],
+                    "p95": sorted_samples[int(len(sorted_samples) * 0.95)] if len(sorted_samples) > 1 else sorted_samples[0],
+                    "p99": sorted_samples[int(len(sorted_samples) * 0.99)] if len(sorted_samples) > 1 else sorted_samples[0],
+                }
+
+            return stats
+
+    def export_prometheus(self) -> str:
+        """导出为 Prometheus 文本格式"""
         lines = []
-        
-        lines.append("# HELP castorice_uptime_seconds Castorice uptime in seconds")
-        lines.append("# TYPE castorice_uptime_seconds gauge")
-        lines.append(f"castorice_uptime_seconds {time.time() - self._start_time}")
-        
-        for name, info in self._metrics.items():
-            metric_type = info["type"]
-            help_text = info["help"]
-            
-            lines.append(f"# HELP {name} {help_text}")
-            lines.append(f"# TYPE {name} {metric_type}")
-            
-            if metric_type == "counter" or metric_type == "gauge":
-                lines.append(f"{name} {info['value']}")
-        
-        lines.append("# HELP castorice_llm_latency_seconds_bucket LLM latency buckets")
-        lines.append("# TYPE castorice_llm_latency_seconds_bucket histogram")
-        for bucket, count in self._latency_buckets.items():
-            lines.append(f"castorice_llm_latency_seconds_bucket{{le=\"{bucket}\"}} {count}")
-        lines.append(f"castorice_llm_latency_seconds_bucket{{le=\"+Inf\"}} {self._latency_count}")
-        
-        lines.append("# HELP castorice_llm_latency_seconds_sum LLM latency sum")
-        lines.append("# TYPE castorice_llm_latency_seconds_sum histogram")
-        lines.append(f"castorice_llm_latency_seconds_sum {self._latency_sum}")
-        
-        lines.append("# HELP castorice_llm_latency_seconds_count LLM latency count")
-        lines.append("# TYPE castorice_llm_latency_seconds_count histogram")
-        lines.append(f"castorice_llm_latency_seconds_count {self._latency_count}")
-        
-        lines.append("# HELP castorice_tool_calls_by_name_total Tool calls by name")
-        lines.append("# TYPE castorice_tool_calls_by_name_total counter")
-        for tool_name, count in self._tool_calls_by_name.items():
-            escaped_name = tool_name.replace('"', '\\"')
-            lines.append(f'castorice_tool_calls_by_name_total{{name="{escaped_name}"}} {count}')
-        
-        return "\n".join(lines) + "\n"
+        stats = self.get_stats()
+
+    # counters
+        for key, value in stats["counters"].items():
+            name, labels = self._parse_key(key)
+            labels_str = self._format_labels(labels)
+            lines.append(f"# TYPE {name} counter")
+            lines.append(f"{name}{labels_str} {value}")
+
+    # latencies (gauge)
+        for key, info in stats["latencies"].items():
+            name, labels = self._parse_key(key)
+            for metric in ["avg", "p50", "p95", "p99", "max"]:
+                labels_with_metric = {**labels, "quantile": metric} if metric != "avg" else labels
+                labels_str = self._format_labels(labels_with_metric)
+                lines.append(f"# TYPE {name}_seconds summary")
+                lines.append(f"{name}_seconds{labels_str} {info[metric]:.6f}")
+
+    # gauges
+        for name, value in stats.get("gauges", {}).items():
+            lines.append(f"# TYPE {name} gauge")
+            lines.append(f"{name} {value}")
+
+        return "\n".join(lines)
+
+    def _parse_key(self, key: str):
+        """解析指标 key"""
+        if "{" in key:
+            name, label_str = key.split("{", 1)
+            label_str = label_str.rstrip("}")
+            labels = {}
+            if label_str:
+                for pair in label_str.split(","):
+                    k, v = pair.split("=")
+                    labels[k] = v
+            return name, labels
+        return key, {}
+
+    def _format_labels(self, labels: Dict[str, Any]) -> str:
+        """格式化 labels"""
+        if not labels:
+            return ""
+        parts = [f'{k}="{v}"' for k, v in sorted(labels.items())]
+        return "{" + ",".join(parts) + "}"
+
+    def reset(self) -> None:
+        """重置所有指标"""
+        with self._lock:
+            self._counters.clear()
+            self._latencies.clear()
+            self._errors.clear()
+            self._tokens.clear()
+            self._gauges.clear()
+
+    # ========== 兼容旧版 API（http_server.py 使用） ==========
+    def set_sessions_count(self, count: int) -> None:
+        """设置当前会话数（兼容旧版 API，gauge 类型）"""
+        with self._lock:
+            self._gauges["sessions_count"] = float(count)
+
+    def set_long_term_count(self, count: int) -> None:
+        """设置长期记忆条目数（兼容旧版 API，gauge 类型）"""
+        with self._lock:
+            self._gauges["long_term_count"] = float(count)
+
+    def generate_prometheus_output(self) -> str:
+        """生成 Prometheus 格式输出（兼容旧版 API）"""
+        return self.export_prometheus()
 
 
-_metrics_collector = None
+# 全局单例
+_global_metrics: Optional[MetricsCollector] = None
+_global_metrics_lock = threading.Lock()
 
 
-def get_metrics_collector() -> MetricsCollector:
-    """获取全局指标收集器单例"""
-    global _metrics_collector
-    if _metrics_collector is None:
-        _metrics_collector = MetricsCollector()
-    return _metrics_collector
+
+def set_metrics(instance: MetricsCollector) -> None:
+    """手动设置全局 MetricsCollector 实例（Agent 初始化时调用，确保配置生效）"""
+    global _global_metrics
+    with _global_metrics_lock:
+        _global_metrics = instance
+
+def get_metrics() -> MetricsCollector:
+    """获取全局指标收集器"""
+    global _global_metrics
+    if _global_metrics is None:
+        with _global_metrics_lock:
+            if _global_metrics is None:
+                _global_metrics = MetricsCollector()
+    return _global_metrics
+
+
+# 向后兼容别名（http_server.py 仍使用旧名称）
+def get_metrics_collector() -> "MetricsCollector":
+    """向后兼容别名"""
+    return get_metrics()
+
+
+class Timer:
+    """上下文管理器：自动记录耗时"""
+
+    def __init__(self, name: str, **labels):
+        self.name = name
+        self.labels = labels
+        self.start = 0.0
+
+    def __enter__(self):
+        self.start = time.time()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        duration = time.time() - self.start
+        metrics = get_metrics()
+        metrics.record_latency(self.name, duration, **self.labels)
+        if exc_type is not None:
+            metrics.inc_error(self.name, **self.labels)

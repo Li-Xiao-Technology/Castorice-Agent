@@ -6,6 +6,9 @@ LLM 调用缓存模块
 - 支持 TTL 和容量限制
 - 线程安全
 - 支持内存和文件两种存储方式
+
+.. deprecated::
+    本模块已弃用，请改用 :mod:`castorice.llm_cache` 中的 ``LLMCache``。
 """
 
 import hashlib
@@ -14,9 +17,16 @@ import logging
 import os
 import threading
 import time
+import warnings
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger("Castorice.ResponseCache")
+
+warnings.warn(
+    "ResponseCache is deprecated, use LLMCache instead",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 
 class ResponseCache:
@@ -148,8 +158,18 @@ class FileResponseCache(ResponseCache):
 _response_cache = None
 
 
+
+def set_response_cache(instance: ResponseCache) -> None:
+    """手动设置全局 ResponseCache 实例（Agent 初始化时调用，确保配置生效）"""
+    global _response_cache
+    _response_cache = instance
 def get_response_cache() -> ResponseCache:
     """获取全局响应缓存单例"""
+    warnings.warn(
+        "ResponseCache is deprecated, use LLMCache instead",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     global _response_cache
     if _response_cache is None:
         _response_cache = ResponseCache()

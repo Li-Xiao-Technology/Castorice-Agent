@@ -108,7 +108,10 @@ class GeminiProvider:
                 "parameters": func.get("parameters", {}),
             })
 
-        import google.generativeai as genai
+        try:
+            import google.genai as genai
+        except ImportError:
+            import google.generativeai as genai
         tool_config = genai.types.Tool(function_declarations=[
             genai.types.FunctionDeclaration(
                 name=gt["name"],

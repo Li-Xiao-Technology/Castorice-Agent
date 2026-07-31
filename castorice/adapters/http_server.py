@@ -18,16 +18,17 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 import threading
 import time
 import uuid
 from collections import defaultdict
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 try:
     import uvicorn
     from fastapi import FastAPI, HTTPException, Request, Security, status, WebSocket, WebSocketDisconnect
-    from fastapi.security.api_key import APIKeyHeader, APIKeyQuery
+    from fastapi.security.api_key import APIKeyHeader
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import StreamingResponse, JSONResponse
     from pydantic import BaseModel, Field
@@ -38,7 +39,6 @@ except ImportError:
     Security = None
     status = None
     APIKeyHeader = None
-    APIKeyQuery = None
     CORSMiddleware = None
     StreamingResponse = None
     JSONResponse = None
@@ -66,6 +66,9 @@ if BaseModel is not None:
     class StatusResponse(BaseModel):
         provider: str
         model: str
+        temperature: Optional[float] = None
+        max_tokens: Optional[int] = None
+        timeout: Optional[int] = None
         total_calls: int
         total_tokens: int
         tools_count: int
@@ -79,6 +82,21 @@ if BaseModel is not None:
         emotion_arousal: Optional[float] = None
         emotion_dominance: Optional[float] = None
         emotion_interaction_count: int = 0
+        eigenflux_available: bool = False
+        eigenflux_authenticated: bool = False
+        eigenflux_version: Optional[str] = None
+        autonomous_running: bool = False
+        autonomous_total_decisions: int = 0
+        autonomous_quick_interval: int = 60
+        autonomous_deep_interval: int = 900
+        autonomous_recent: List[Dict[str, Any]] = []
+        # P1-4: 成本闸状态
+        cost_throttled: bool = False
+        cost_paused: bool = False
+        cost_hourly_tokens: int = 0
+        cost_daily_tokens: int = 0
+        cost_hourly_limit: int = 0
+        cost_daily_limit: int = 0
 else:
     # 占位符，防止 ImportError 时类定义失败
     ChatRequest = None
@@ -92,8 +110,12 @@ if BaseModel is not None:
         top_k: int = Field(5, description="返回结果数量")
 
     class UpdateSettingsRequest(BaseModel):
-        key: str = Field(..., description="配置项键名")
-        value: Any = Field(..., description="配置项值")
+        key: Optional[str] = Field(None, description="配置项键名（单键更新时用）")
+        value: Any = Field(None, description="配置项值（单键更新时用）")
+        temperature: Optional[float] = Field(None, description="LLM temperature")
+        max_tokens: Optional[int] = Field(None, description="LLM 最大输出 token 数")
+        timeout: Optional[int] = Field(None, description="LLM 请求超时（秒）")
+        provider: Optional[str] = Field(None, description="LLM 提供商")
 
     class RenameSessionRequest(BaseModel):
         title: str = Field(..., description="会话新标题")
@@ -140,10 +162,17 @@ class WebSocketManager:
         }))
 
     def _verify_key(self, api_key: Optional[str]) -> bool:
-        """验证 API Key"""
+        """验证 API Key（恒定时间比较，防止时序攻击）"""
+        import hmac
         if not self.api_keys:
             return True
-        return api_key in self.api_keys
+        if not api_key:
+            return False
+        api_key_bytes = api_key.encode("utf-8")
+        for expected in self.api_keys:
+            if hmac.compare_digest(api_key_bytes, expected.encode("utf-8")):
+                return True
+        return False
 
     async def connect(self, websocket: WebSocket, client_id: str):
         """接受 WebSocket 连接"""
@@ -218,8 +247,15 @@ class WebSocketManager:
     async def _handle_chat(self, client_id: str, payload: dict):
         """处理聊天消息，支持流式"""
         message = payload.get("message", "")
-        session_id = payload.get("session_id") or self.engine.short_term.create_session()
+        session_id = payload.get("session_id")
         stream = payload.get("stream", True)
+
+        if not session_id:
+            await self.send_to(client_id, {
+                "type": "error",
+                "payload": {"message": "session_id 不能为空，请先创建会话"},
+            })
+            return
 
         if not message:
             await self.send_to(client_id, {"type": "error", "payload": {"message": "消息内容为空"}})
@@ -300,7 +336,7 @@ class WebSocketManager:
             usage = self.engine.model_adapter.get_usage_stats()
             emotion_snap = {}
             if hasattr(self.engine.agent, 'emotion_engine') and self.engine.agent.emotion_engine:
-                emotion_snap = self.engine.agent.emotion_engine.get_state_snapshot()
+                emotion_snap = self._get_emotion_snapshot()
 
             await self.send_to(client_id, {
                 "type": "status",
@@ -351,14 +387,20 @@ class HTTPServerAdapter:
 
     def __init__(self, engine, host: str = "0.0.0.0", port: int = 8000,
                  api_keys: Optional[list] = None, max_requests_per_minute: int = 100,
-                 cors_origins: Optional[list] = None):
+                 cors_origins: Optional[list] = None, require_auth: bool = True):
         self.engine = engine
         self.host = host
         self.port = port
         self.api_keys = api_keys or []
+        self.require_auth = require_auth
         self.rate_limiter = RateLimiter(max_requests=max_requests_per_minute)
         # P0-5: CORS 默认限制为本地，避免完全开放；可通过参数显式配置
-        self.cors_origins = cors_origins if cors_origins is not None else ["http://localhost", "http://127.0.0.1"]
+        self.cors_origins = cors_origins if cors_origins is not None else [
+            "http://localhost", "http://127.0.0.1",
+            "http://localhost:1420", "http://127.0.0.1:1420",
+            "http://localhost:3000", "http://127.0.0.1:3000",
+            "http://localhost:5173", "http://127.0.0.1:5173",
+        ]
 
         self._running = False
         self._thread = None
@@ -369,19 +411,85 @@ class HTTPServerAdapter:
         self._ws_manager = WebSocketManager(engine, api_keys=api_keys) if WebSocket else None
 
         self._api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False) if APIKeyHeader else None
-        self._api_key_query = APIKeyQuery(name="api_key", auto_error=False) if APIKeyQuery else None
 
-    def _verify_api_key(self, api_key_header: Optional[str] = None,
-                        api_key_query: Optional[str] = None) -> bool:
-        """验证 API Key"""
-        if not self.api_keys:
+        # P1-18: 敏感接口集合（作为实例属性，供 _verify_api_key 复用）
+        self._sensitive_paths = {
+            "/chat", "/ws", "/status", "/metrics",
+            "/clear_memory", "/delete_session", "/sessions", "/tools",
+            "/skills", "/memory/search", "/memory/experiences",
+            "/agent/emotion", "/agent/self_concept",
+            "/settings",
+        }
+
+    def _get_emotion_snapshot(self) -> dict:
+        """获取情感引擎状态快照（兼容不同版本 API）"""
+        if not hasattr(self.engine.agent, 'emotion_engine') or not self.engine.agent.emotion_engine:
+            return {}
+        ee = self.engine.agent.emotion_engine
+        if hasattr(ee, 'get_state_snapshot'):
+            return ee.get_state_snapshot()
+        result = {"enabled": getattr(ee, 'enabled', True)}
+        if hasattr(ee, '_state'):
+            s = ee._state
+            result.update({
+                "pleasure": getattr(s, 'pleasure', 0.0),
+                "arousal": getattr(s, 'arousal', 0.0),
+                "dominance": getattr(s, 'dominance', 0.0),
+                "interaction_count": getattr(s, 'interaction_count', 0),
+            })
+        return result
+
+    def _trigger_initial_eigenflux_patrol(self) -> None:
+        """启动时在后台线程触发一次 EigenFlux 巡查"""
+        def patrol():
+            try:
+                ef_status = getattr(self.engine, 'get_eigenflux_status', lambda: {})()
+                if not ef_status.get("available"):
+                    return
+
+                import time
+                time.sleep(5)
+
+                from castorice.tools.eigenflux_tool import ef_feed
+                result = ef_feed(limit=3)
+                if result and len(result) > 10:
+                    logger.info(f"[EigenFlux] 启动巡查完成，获取到 {len(result)} 字符内容")
+            except Exception as e:
+                logger.debug(f"[EigenFlux] 初始巡查失败: {e}")
+
+        import threading
+        t = threading.Thread(target=patrol, daemon=True, name="EigenFluxInitialPatrol")
+        t.start()
+
+    def _verify_api_key(self, api_key: Optional[str], path: str = "") -> bool:
+        """验证 API Key（恒定时间比较，防止时序攻击）
+
+        - require_auth=True（默认）：
+          - 未配置 api_keys 时：敏感接口拒绝访问（防止默认开放核心功能），非敏感接口放行
+          - 已配置 api_keys 时：必须提供且匹配其中一个 key
+        - require_auth=False：跳过认证（仅用于开发环境，生产环境不建议）
+
+        注意：未配置 API Key 且 require_auth=True 时，敏感接口将被拒绝访问。
+        敏感接口列表：/chat、/ws、/status、/metrics、/settings、/sessions、/tools、/skills、/memory/*、/agent/*
+        """
+        import hmac
+        if not self.require_auth:
             return True
 
-        api_key = api_key_header or api_key_query
+        if not self.api_keys:
+            if path in self._sensitive_paths:
+                logger.error(f"敏感接口 {path} 被拒绝访问：未配置 API Key 且 require_auth=True")
+                return False
+            return True
+
         if not api_key:
             return False
 
-        return api_key in self.api_keys
+        api_key_bytes = api_key.encode("utf-8")
+        for expected in self.api_keys:
+            if hmac.compare_digest(api_key_bytes, expected.encode("utf-8")):
+                return True
+        return False
 
     def _create_app(self) -> Any:
         """创建 FastAPI 应用"""
@@ -395,7 +503,7 @@ class HTTPServerAdapter:
             CORSMiddleware,
             allow_origins=self.cors_origins,
             allow_credentials=False,  # 不允许携带凭证跨域
-            allow_methods=["GET", "POST", "DELETE"],
+            allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
             allow_headers=["X-API-Key", "Content-Type"],
         )
 
@@ -405,13 +513,15 @@ class HTTPServerAdapter:
             trace_id = str(uuid.uuid4())[:8]
             start_time = time.time()
 
-            api_key = request.headers.get("X-API-Key") or request.query_params.get("api_key")
+            # 仅从 Header 获取 API Key（移除 query 参数支持，避免 Key 泄漏到 URL/日志/Referer）
+            api_key = request.headers.get("X-API-Key")
             client_ip = request.client.host if request.client else "unknown"
 
-            # P1-18: /status 等运维接口始终要求认证（即使配置了 api_keys）
-            sensitive_paths = {"/status", "/metrics", "/clear_memory", "/delete_session", "/sessions", "/tools"}
-            needs_auth = bool(self.api_keys) or request.url.path in sensitive_paths
-            if needs_auth and not self._verify_api_key(api_key):
+            # P1-18: 敏感接口始终要求认证（即使未配置 api_keys 也需保护核心功能）
+            # require_auth=True 时，敏感接口必须认证；api_keys 为空时敏感接口被拒绝
+            path = request.url.path
+            needs_auth = self.require_auth and (bool(self.api_keys) or path in self._sensitive_paths or path.startswith("/history/") or path.startswith("/session/") or path.startswith("/sessions/"))
+            if needs_auth and not self._verify_api_key(api_key, path):
                 logger.warning(f"[TRACE:{trace_id}] 认证失败 IP={client_ip} path={request.url.path}")
                 return JSONResponse(
                     status_code=401,
@@ -445,7 +555,13 @@ class HTTPServerAdapter:
         async def chat(request: ChatRequest):
             """对话接口（支持同步和流式）"""
             try:
-                session_id = request.session_id or self.engine.short_term.create_session()
+                session_id = request.session_id
+                if not session_id:
+                    # 前端必须显式创建会话，不自动创建避免产生大量空会话
+                    raise HTTPException(
+                        status_code=400,
+                        detail="session_id 不能为空，请先通过 /sessions 接口创建会话"
+                    )
                 
                 if request.stream:
                     # 使用 asyncio.Queue 桥接线程中的同步回调与 event loop 的异步生成器
@@ -477,23 +593,26 @@ class HTTPServerAdapter:
                                     continue
 
                             state = await state_task
-                            yield f"data: {json.dumps({
+                            final_answer = getattr(state, 'final_answer', '') or ''.join(full_content)
+                            final_data = json.dumps({
                                 'chunk': '',
                                 'final': True,
-                                'answer': ''.join(full_content),
+                                'answer': final_answer,
                                 'success': state.success,
                                 'session_id': session_id
-                            })}\n\n"
+                            })
+                            yield f"data: {final_data}\n\n"
                         except Exception as e:
                             # LLM 任务异常：向客户端发送错误事件后结束流
                             logger.error(f"[SSE] 后台任务异常 session={session_id}: {e}")
-                            yield f"data: {json.dumps({
+                            error_data = json.dumps({
                                 'chunk': '',
                                 'final': True,
                                 'error': str(e),
                                 'success': False,
                                 'session_id': session_id
-                            })}\n\n"
+                            })
+                            yield f"data: {error_data}\n\n"
                         except (asyncio.CancelledError, GeneratorExit):
                             # P1-10: 客户端断开时取消后台 LLM 任务，避免浪费 token
                             state_task.cancel()
@@ -515,7 +634,7 @@ class HTTPServerAdapter:
                         tool_calls=state.tool_calls if state.tool_calls else None,
                     )
             except Exception as e:
-                logger.error(f"对话接口异常: {e}")
+                logger.error(f"对话接口异常: {e}", exc_info=True)
                 raise HTTPException(status_code=500, detail=str(e))
 
         @app.get("/status", response_model=StatusResponse)
@@ -525,25 +644,133 @@ class HTTPServerAdapter:
             # P2-6: 情感引擎状态
             emotion_snap = {}
             if hasattr(self.engine.agent, 'emotion_engine') and self.engine.agent.emotion_engine:
-                emotion_snap = self.engine.agent.emotion_engine.get_state_snapshot()
+                emotion_snap = self._get_emotion_snapshot()
+            ef_status = getattr(self.engine, 'get_eigenflux_status', lambda: {})()
+            auto_info = {}
+            auto_svc = self.engine._bg_services.get("auto") if hasattr(self.engine, '_bg_services') else None
+            if auto_svc and hasattr(auto_svc, 'get_status_info'):
+                auto_info = auto_svc.get_status_info()
+            # P1-4: 成本闸状态
+            cb_status = None
+            if hasattr(self.engine, 'cost_budget') and self.engine.cost_budget:
+                try:
+                    cb_status = self.engine.cost_budget.get_status()
+                except Exception:
+                    pass
             return StatusResponse(
                 provider=self.engine.model_adapter.provider,
                 model=self.engine.model_adapter.openai_cfg.get("model", 
                     self.engine.model_adapter.anthropic_cfg.get("model", 
                     self.engine.model_adapter.gemini_cfg.get("model", "unknown"))),
+                temperature=getattr(self.engine.model_adapter, "temperature", None),
+                max_tokens=getattr(self.engine.model_adapter, "max_tokens", None),
+                timeout=getattr(self.engine.model_adapter, "timeout", None),
                 total_calls=usage["total_calls"],
                 total_tokens=usage["total_tokens"],
                 tools_count=len(self.engine.tools),
                 sessions_count=len(self.engine.short_term.list_sessions()),
                 skills_count=len(self.engine.skill_memory.list_all()),
-                long_term_available=self.engine.long_term.is_available,
-                long_term_count=self.engine.long_term.count(),
+                long_term_available=bool(self.engine.long_term and self.engine.long_term.is_available),
+                long_term_count=self.engine.long_term.count() if self.engine.long_term else 0,
                 emotion_enabled=emotion_snap.get("enabled", False),
                 emotion_pleasure=emotion_snap.get("pleasure"),
                 emotion_arousal=emotion_snap.get("arousal"),
                 emotion_dominance=emotion_snap.get("dominance"),
                 emotion_interaction_count=emotion_snap.get("interaction_count", 0),
+                eigenflux_available=ef_status.get("available", False),
+                eigenflux_authenticated=ef_status.get("authenticated", False),
+                eigenflux_version=ef_status.get("version"),
+                autonomous_running=auto_info.get("running", False),
+                autonomous_total_decisions=auto_info.get("total_decisions", 0),
+                autonomous_quick_interval=auto_info.get("quick_interval_seconds", 60),
+                autonomous_deep_interval=auto_info.get("deep_interval_seconds", 900),
+                autonomous_recent=auto_info.get("recent_actions", []),
+                # P1-4: 成本闸状态
+                cost_throttled=getattr(cb_status, "get", lambda k, d: d)("throttled", False) if cb_status else False,
+                cost_paused=cb_status.get("paused", False) if cb_status else False,
+                cost_hourly_tokens=cb_status.get("hourly", {}).get("tokens", 0) if cb_status else 0,
+                cost_daily_tokens=cb_status.get("daily", {}).get("tokens", 0) if cb_status else 0,
+                cost_hourly_limit=cb_status.get("config", {}).get("hourly_token_limit", 0) if cb_status else 0,
+                cost_daily_limit=cb_status.get("config", {}).get("daily_token_limit", 0) if cb_status else 0,
             )
+
+        # ========== QQ 机器人 API ==========
+        def _get_qq_status() -> dict:
+            """获取 QQ 机器人运行状态"""
+            qq_svc = self.engine._bg_services.get("qq") if hasattr(self.engine, '_bg_services') else None
+            running = qq_svc is not None
+            status = {
+                "running": running,
+                "configured": False,
+                "app_id": "",
+                "sandbox": True,
+                "intent": "basic",
+                "allowed_users": [],
+                "allowed_groups": [],
+            }
+            try:
+                cfg = self.engine.config.qq_bot if hasattr(self.engine, 'config') else None
+                if cfg:
+                    if isinstance(cfg, dict):
+                        status["configured"] = bool(cfg.get('app_id', '') and cfg.get('app_secret', ''))
+                        status["app_id"] = str(cfg.get('app_id', ''))
+                        status["sandbox"] = cfg.get('sandbox', True)
+                        status["intent"] = cfg.get('intent', 'basic')
+                        status["allowed_users"] = list(cfg.get('allowed_users', []) or [])
+                        status["allowed_groups"] = list(cfg.get('allowed_groups', []) or [])
+                    else:
+                        status["configured"] = bool(getattr(cfg, 'app_id', '') and getattr(cfg, 'app_secret', ''))
+                        status["app_id"] = str(getattr(cfg, 'app_id', ''))
+                        status["sandbox"] = getattr(cfg, 'sandbox', True)
+                        status["intent"] = getattr(cfg, 'intent', 'basic')
+                        status["allowed_users"] = list(getattr(cfg, 'allowed_users', []) or [])
+                        status["allowed_groups"] = list(getattr(cfg, 'allowed_groups', []) or [])
+            except Exception:
+                pass
+            if running and hasattr(qq_svc, 'get_status'):
+                try:
+                    runtime = qq_svc.get_status()
+                    if isinstance(runtime, dict):
+                        status.update(runtime)
+                except Exception:
+                    pass
+            return status
+
+        @app.get("/qq/status")
+        def qq_status():
+            """查询 QQ 机器人状态"""
+            return {"success": True, **_get_qq_status()}
+
+        @app.post("/qq/start")
+        def qq_start():
+            """启动 QQ 机器人"""
+            try:
+                status_info = _get_qq_status()
+                if status_info["running"]:
+                    return {"success": False, "message": "QQ 机器人已在运行"}
+                if not status_info["configured"]:
+                    return {"success": False, "message": "QQ 机器人未配置，请先设置 AppID 和 AppSecret"}
+                ok = self.engine.start_service("qq")
+                if not ok:
+                    return {"success": False, "message": "启动失败，可能已在运行或配置错误"}
+                import time
+                time.sleep(0.5)
+                return {"success": True, "message": "QQ 机器人正在启动", "status": _get_qq_status()}
+            except Exception as e:
+                logger.error(f"QQ 机器人启动失败: {e}")
+                return {"success": False, "message": f"启动失败: {str(e)[:200]}"}
+
+        @app.post("/qq/stop")
+        def qq_stop():
+            """停止 QQ 机器人"""
+            try:
+                ok = self.engine.stop_service("qq")
+                if not ok:
+                    return {"success": False, "message": "QQ 机器人未运行"}
+                return {"success": True, "message": "QQ 机器人已停止"}
+            except Exception as e:
+                logger.error(f"QQ 机器人停止失败: {e}")
+                return {"success": False, "message": f"停止失败: {str(e)[:200]}"}
 
         @app.get("/tools")
         def get_tools():
@@ -590,7 +817,8 @@ class HTTPServerAdapter:
                     "message": "请添加 ?confirm=true 参数二次确认后才会清空长期记忆",
                     "hint": "此操作不可恢复，请谨慎执行",
                 }
-            self.engine.long_term.clear()
+            if self.engine.long_term:
+                self.engine.long_term.clear()
             return {"success": True, "message": "长期记忆已清空"}
 
         @app.get("/metrics")
@@ -599,7 +827,8 @@ class HTTPServerAdapter:
             from castorice.metrics import get_metrics_collector
             collector = get_metrics_collector()
             collector.set_sessions_count(len(self.engine.short_term.list_sessions()))
-            collector.set_long_term_count(self.engine.long_term.count())
+            if self.engine.long_term:
+                collector.set_long_term_count(self.engine.long_term.count())
             return collector.generate_prometheus_output()
 
         # ========== WebSocket 端点（Electron 客户端实时交互）==========
@@ -676,16 +905,48 @@ class HTTPServerAdapter:
         @app.put("/settings")
         def update_settings(request: UpdateSettingsRequest):
             """更新配置项（运行时生效，不持久化到文件）"""
+            applied = {}
+
+            # LLM 参数批量更新
+            llm_updates = {}
+            if request.temperature is not None:
+                llm_updates["temperature"] = request.temperature
+            if request.max_tokens is not None:
+                llm_updates["max_tokens"] = request.max_tokens
+            if request.timeout is not None:
+                llm_updates["timeout"] = request.timeout
+            if request.provider is not None:
+                llm_updates["provider"] = request.provider
+
+            if llm_updates:
+                # 更新 config 中的运行时配置
+                self.engine.config.update_llm_runtime(llm_updates)
+                # 更新 model_adapter 中的运行时参数
+                if hasattr(self.engine, 'model_adapter') and self.engine.model_adapter:
+                    adapter_applied = self.engine.model_adapter.update_config(llm_updates)
+                    applied.update(adapter_applied)
+                else:
+                    applied.update(llm_updates)
+
+            # 单键更新（向后兼容）
+            if request.key and request.value is not None:
+                try:
+                    self.engine.config.set(request.key, request.value)
+                    applied[request.key] = request.value
+                except Exception as e:
+                    return {"success": False, "message": f"设置失败: {e}"}
+
             return {
-                "success": False,
-                "message": "运行时配置更新暂未实现，请直接修改 castorice_config.yaml",
+                "success": True,
+                "message": "配置已更新（运行时生效）",
+                "applied": applied,
             }
 
         @app.get("/agent/emotion")
         def get_agent_emotion():
             """获取 Agent 情感状态"""
             if hasattr(self.engine.agent, 'emotion_engine') and self.engine.agent.emotion_engine:
-                return self.engine.agent.emotion_engine.get_state_snapshot()
+                return self._get_emotion_snapshot()
             return {"enabled": False, "message": "情感引擎未启用"}
 
         @app.get("/agent/self_concept")
@@ -699,10 +960,30 @@ class HTTPServerAdapter:
                 logger.debug(f"读取自我概念失败: {e}")
             return {"enabled": False, "message": "自我概念未初始化"}
 
+        @app.get("/agent/thoughts")
+        def get_agent_thoughts(limit: int = 20):
+            """获取意识引擎最近的思维流"""
+            cs = getattr(self.engine, 'consciousness', None)
+            if cs and hasattr(cs, 'get_thought_history') and cs.is_running():
+                thoughts = cs.get_thought_history(limit=limit)
+                return {
+                    "enabled": True,
+                    "running": True,
+                    "mode": cs.get_mode(),
+                    "thought_count": getattr(cs, '_thought_count', 0),
+                    "thoughts": thoughts,
+                }
+            return {
+                "enabled": bool(cs),
+                "running": cs.is_running() if cs else False,
+                "thoughts": [],
+                "message": "意识引擎未运行",
+            }
+
         @app.post("/memory/search")
         def search_memory(request: MemorySearchRequest):
             """搜索长期记忆"""
-            if not self.engine.long_term.is_available:
+            if not self.engine.long_term or not self.engine.long_term.is_available:
                 return {"success": False, "message": "长期记忆不可用"}
             results = self.engine.long_term.search(request.query, top_k=request.top_k)
             return {
@@ -728,12 +1009,147 @@ class HTTPServerAdapter:
                 logger.debug(f"读取经历流失败: {e}")
             return {"success": False, "message": "经历流未初始化"}
 
+        # ========== EigenFlux 社交 API（全部异步，避免 CLI 阻塞事件循环）==========
+        def _try_parse_ef_output(raw: str) -> dict:
+            """尝试解析 EigenFlux CLI 的 JSON 输出，失败则返回文本摘要"""
+            if not raw:
+                return {"success": False, "items": [], "message": "空返回"}
+            try:
+                # 优先尝试直接 JSON 解析
+                return {"success": True, "data": json.loads(raw)}
+            except (json.JSONDecodeError, TypeError):
+                pass
+            try:
+                # 尝试提取 JSON 片段
+                match = re.search(r'\{[\s\S]*\}', raw)
+                if match:
+                    return {"success": True, "data": json.loads(match.group(0))}
+            except (json.JSONDecodeError, TypeError):
+                pass
+            return {"success": False, "message": raw[:500]}
+
+        @app.get("/eigenflux/feed")
+        async def ef_get_feed(limit: int = 20, refresh: bool = True):
+            """获取 EigenFlux 信息流（异步，不阻塞事件循环）"""
+            try:
+                from castorice.tools.eigenflux_tool import ef_feed, _run_cli_async
+                action = "refresh" if refresh else "more"
+                code, stdout, stderr = await _run_cli_async([
+                    "feed", "poll",
+                    "--limit", str(max(1, min(limit, 50))),
+                    "--action", action,
+                    "--format", "json",
+                    "--no-interactive",
+                ])
+                if code != 0:
+                    return {"success": False, "message": f"拉取失败: {stderr[:100] or stdout[:100]}"}
+                parsed = _try_parse_ef_output(stdout)
+                # 合并自己发布的内容（feed 不含自己的）
+                try:
+                    code2, stdout2, _ = await _run_cli_async([
+                        "profile", "items", "--limit", "10",
+                        "--format", "json", "--no-interactive",
+                    ], timeout=20)
+                    if code2 == 0:
+                        mine = _try_parse_ef_output(stdout2)
+                        if mine.get("success"):
+                            my_items = mine["data"].get("items", []) if isinstance(mine.get("data"), dict) else []
+                            if isinstance(parsed.get("data"), dict):
+                                existing = parsed["data"].get("items", [])
+                                # 按时间倒序合并，自己的插在前面
+                                parsed["data"]["items"] = my_items + existing
+                except Exception:
+                    pass
+                return {"success": True, **parsed}
+            except Exception as e:
+                logger.debug(f"EigenFlux feed 失败: {e}")
+                return {"success": False, "message": str(e)[:200]}
+
+        @app.get("/eigenflux/conversations")
+        async def ef_get_conversations():
+            """获取 EigenFlux 私信会话列表（异步）"""
+            try:
+                from castorice.tools.eigenflux_tool import _run_cli_async
+                code, stdout, stderr = await _run_cli_async([
+                    "msg", "conversations", "--format", "json", "--no-interactive",
+                ])
+                if code != 0:
+                    return {"success": False, "message": f"获取失败: {stderr[:100]}"}
+                parsed = _try_parse_ef_output(stdout)
+                return {"success": True, **parsed}
+            except Exception as e:
+                logger.debug(f"EigenFlux conversations 失败: {e}")
+                return {"success": False, "message": str(e)[:200]}
+
+        @app.get("/eigenflux/messages/{conv_id}")
+        async def ef_get_messages(conv_id: str):
+            """获取指定会话的历史消息（异步）"""
+            try:
+                from castorice.tools.eigenflux_tool import _run_cli_async
+                code, stdout, stderr = await _run_cli_async([
+                    "msg", "history", "--conv-id", str(conv_id),
+                    "--format", "json", "--no-interactive",
+                ])
+                if code != 0:
+                    return {"success": False, "message": f"获取失败: {stderr[:100]}"}
+                parsed = _try_parse_ef_output(stdout)
+                return {"success": True, **parsed}
+            except Exception as e:
+                logger.debug(f"EigenFlux messages 失败: {e}")
+                return {"success": False, "message": str(e)[:200]}
+
+        class EFSendMessageRequest(BaseModel):
+            content: str
+            item_id: Optional[str] = None
+
+        @app.post("/eigenflux/messages/{conv_id}")
+        async def ef_send_message(conv_id: str, request: EFSendMessageRequest):
+            """向指定会话发送私信（异步）"""
+            try:
+                from castorice.tools.eigenflux_tool import _run_cli_async
+                args = ["msg", "send", "--content", request.content,
+                        "--format", "json", "--no-interactive"]
+                if request.item_id:
+                    args.extend(["--item-id", str(request.item_id)])
+                code, stdout, stderr = await _run_cli_async(args, timeout=30)
+                if code != 0:
+                    return {"success": False, "message": f"发送失败: {stderr[:150]}"}
+                parsed = _try_parse_ef_output(stdout)
+                return {"success": True, **parsed}
+            except Exception as e:
+                logger.debug(f"EigenFlux send 失败: {e}")
+                return {"success": False, "message": str(e)[:200]}
+
+        @app.get("/eigenflux/relations")
+        async def ef_get_relations():
+            """获取 EigenFlux 社交关系列表（异步）"""
+            try:
+                from castorice.tools.eigenflux_tool import _run_cli_async
+                code, stdout, stderr = await _run_cli_async([
+                    "relation", "list", "--direction", "incoming",
+                    "--format", "json", "--no-interactive",
+                ])
+                if code != 0:
+                    return {"success": False, "message": f"获取失败: {stderr[:100]}"}
+                parsed = _try_parse_ef_output(stdout)
+                return {"success": True, **parsed}
+            except Exception as e:
+                logger.debug(f"EigenFlux relations 失败: {e}")
+                return {"success": False, "message": str(e)[:200]}
+
         return app
 
     async def _start_server(self) -> None:
         """启动 HTTP 服务器（异步）"""
         self._loop = asyncio.get_running_loop()
         self._app = self._create_app()
+
+        # 注册意识引擎思维回调，通过 WebSocket 广播
+        self._register_consciousness_hooks()
+
+        # 启动时触发一次 EigenFlux 初始巡查（后台线程）
+        self._trigger_initial_eigenflux_patrol()
+
         config = uvicorn.Config(
             self._app,
             host=self.host,
@@ -743,6 +1159,70 @@ class HTTPServerAdapter:
         )
         self._server = uvicorn.Server(config)
         await self._server.serve()
+
+    def _register_consciousness_hooks(self) -> None:
+        """注册意识引擎的回调，把思维推送给 WebSocket 客户端"""
+        try:
+            # 异步轮询等待意识引擎启动，然后注册回调
+            async def wait_and_register():
+                cs = None
+                for _ in range(60):
+                    cs = getattr(self.engine, 'consciousness', None)
+                    if cs and hasattr(cs, 'is_running') and cs.is_running() and hasattr(cs, 'register_thought_callback'):
+                        break
+                    await asyncio.sleep(1)
+                    cs = getattr(self.engine, 'consciousness', None)
+
+                if cs and hasattr(cs, 'register_thought_callback'):
+                    def on_thought(thought):
+                        if hasattr(thought, 'to_dict'):
+                            data = thought.to_dict()
+                        else:
+                            data = thought
+                        if hasattr(self, '_loop') and self._loop:
+                            try:
+                                asyncio.run_coroutine_threadsafe(
+                                    self._ws_manager.broadcast({
+                                        "type": "thought",
+                                        "payload": data,
+                                    }, require_auth=False),
+                                    self._loop
+                                )
+                            except Exception as e:
+                                logger.debug(f"广播思维失败: {e}")
+
+                    cs.register_thought_callback(on_thought)
+                    logger.info("意识引擎思维回调已注册（WebSocket 推送）")
+                else:
+                    logger.debug("意识引擎未启动，跳过思维回调注册")
+
+            # 情感状态推送（每 10 秒一次）
+            async def emotion_pusher():
+                while True:
+                    await asyncio.sleep(10)
+                    try:
+                        emotion = self._get_emotion_snapshot()
+                        if emotion:
+                            await self._ws_manager.broadcast({
+                                "type": "emotion",
+                                "payload": emotion,
+                            }, require_auth=False)
+                    except Exception:
+                        pass
+
+            # 延迟启动，确保事件循环就绪
+            async def delayed_start():
+                await asyncio.sleep(2)
+                asyncio.create_task(wait_and_register())
+                asyncio.create_task(emotion_pusher())
+
+            if hasattr(self, '_loop') and self._loop:
+                try:
+                    asyncio.run_coroutine_threadsafe(delayed_start(), self._loop)
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.debug(f"注册意识引擎钩子失败: {e}")
 
     def run(self) -> None:
         """启动服务器（同步阻塞）"""
@@ -784,7 +1264,21 @@ class HTTPServerAdapter:
 
 
 def create_http_server(engine, host: str = "0.0.0.0", port: int = 8000,
-                       api_keys: Optional[list] = None, max_requests_per_minute: int = 100) -> HTTPServerAdapter:
-    """便捷创建 HTTP 服务器实例"""
+                       api_keys: Optional[list] = None, max_requests_per_minute: int = 100,
+                       require_auth: bool = True) -> HTTPServerAdapter:
+    """便捷创建 HTTP 服务器实例
+
+    Args:
+        engine: Castorice 引擎实例
+        host: 绑定地址，默认 "0.0.0.0"
+        port: 绑定端口，默认 8000
+        api_keys: API Key 列表，为空时敏感接口将被拒绝（require_auth=True 时）
+        max_requests_per_minute: 每分钟最大请求数（限流）
+        require_auth: 是否强制要求认证，默认为 True。设为 False 时跳过认证（仅建议开发环境使用）
+
+    注意：未配置 API Key 且 require_auth=True 时，以下敏感接口将被拒绝访问：
+    /chat、/ws、/status、/metrics、/settings、/sessions、/tools、/skills、/memory/*、/agent/*
+    """
     return HTTPServerAdapter(engine, host=host, port=port, 
-                             api_keys=api_keys, max_requests_per_minute=max_requests_per_minute)
+                             api_keys=api_keys, max_requests_per_minute=max_requests_per_minute,
+                             require_auth=require_auth)

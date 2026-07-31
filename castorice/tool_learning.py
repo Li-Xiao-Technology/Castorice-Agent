@@ -15,24 +15,84 @@ import json
 import logging
 import threading
 import time
+import uuid
 from collections import deque
 from typing import Any, Dict, List, Optional, Tuple
+
+from castorice.storage import SqliteStorage
+from castorice.utils import chinese_tokenize
 
 logger = logging.getLogger("Castorice.ToolLearning")
 
 
-class ToolCallMemory:
+class ToolCallMemory(SqliteStorage):
     """
     工具调用模式记忆
 
     存储每次工具调用的"描述→参数→结果"，用于将来辅助参数推断
+
+    持久化：调用记录写入 SQLite，重启后从 DB 恢复历史；
+    内存中保留 deque 用于快速语义检索。
     """
 
-    def __init__(self, max_records_per_tool: int = 200):
+    def __init__(
+        self,
+        max_records_per_tool: int = 200,
+        db_path: str = "./castorice_data/tool_learning.db",
+    ):
+        super().__init__(db_path)
         self._lock = threading.RLock()
         self._max_records = max_records_per_tool
         # tool_name -> deque of records
         self._records: Dict[str, deque] = {}
+        self._init_db()
+        self._load_from_db()
+
+    def _init_db(self) -> None:
+        """创建 SQLite 表（如不存在）"""
+        conn = self._get_conn()
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS tool_calls (
+                id TEXT PRIMARY KEY,
+                tool_name TEXT,
+                description TEXT,
+                params TEXT,
+                result TEXT,
+                success INTEGER,
+                timestamp REAL
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tool_calls_name_ts "
+            "ON tool_calls(tool_name, timestamp DESC)"
+        )
+        conn.commit()
+
+    def _load_from_db(self) -> None:
+        """初始化时从 SQLite 加载历史调用记录到内存 deque"""
+        conn = self._get_conn()
+        try:
+            rows = conn.execute(
+                "SELECT tool_name, description, params, result, success, timestamp "
+                "FROM tool_calls ORDER BY timestamp ASC"
+            ).fetchall()
+            for row in rows:
+                tool_name = row[0]
+                if tool_name not in self._records:
+                    self._records[tool_name] = deque(maxlen=self._max_records)
+                try:
+                    args = json.loads(row[2]) if row[2] else {}
+                except (json.JSONDecodeError, TypeError):
+                    args = {}
+                self._records[tool_name].append({
+                    "desc": row[1] or "",
+                    "args": args,
+                    "result_summary": row[3] or "",
+                    "success": bool(row[4]),
+                    "ts": row[5] or time.time(),
+                })
+        except Exception as e:
+            logger.warning(f"加载工具调用历史失败: {e}")
 
     def record(
         self,
@@ -43,16 +103,40 @@ class ToolCallMemory:
         success: bool,
     ) -> None:
         """记录一次工具调用"""
+        ts = time.time()
+        desc = input_description[:200]
+        result = result_summary[:200]
+        call_id = uuid.uuid4().hex[:16]
         with self._lock:
             if tool_name not in self._records:
                 self._records[tool_name] = deque(maxlen=self._max_records)
             self._records[tool_name].append({
-                "desc": input_description[:200],
+                "desc": desc,
                 "args": arguments,
-                "result_summary": result_summary[:200],
+                "result_summary": result,
                 "success": success,
-                "ts": time.time(),
+                "ts": ts,
             })
+            # 同步写入 DB 持久化
+            try:
+                conn = self._get_conn()
+                conn.execute(
+                    "INSERT INTO tool_calls "
+                    "(id, tool_name, description, params, result, success, timestamp) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        call_id,
+                        tool_name,
+                        desc,
+                        json.dumps(arguments, ensure_ascii=False),
+                        result,
+                        1 if success else 0,
+                        ts,
+                    ),
+                )
+                conn.commit()
+            except Exception as e:
+                logger.debug(f"工具调用记录写入 DB 失败: {e}")
 
     def find_similar(
         self,
@@ -75,12 +159,12 @@ class ToolCallMemory:
             if not success_records:
                 return []
 
-            # 简单相似度：词集合 Jaccard
-            input_words = set(input_description.lower().split())
+            # 简单相似度：词集合 Jaccard（使用中文分词，支持中英文混合）
+            input_words = chinese_tokenize(input_description)
 
             scored = []
             for rec in success_records:
-                rec_words = set(rec["desc"].lower().split())
+                rec_words = chinese_tokenize(rec["desc"])
                 if not rec_words:
                     continue
                 sim = len(input_words & rec_words) / len(input_words | rec_words)
@@ -207,6 +291,12 @@ _tool_memory: Optional[ToolCallMemory] = None
 _tool_memory_lock = threading.Lock()
 
 
+
+def set_tool_memory(instance: ToolCallMemory) -> None:
+    """手动设置全局 ToolCallMemory 实例（Agent 初始化时调用，确保配置生效）"""
+    global _tool_memory
+    with _tool_memory_lock:
+        _tool_memory = instance
 def get_tool_memory() -> ToolCallMemory:
     """获取全局工具记忆单例"""
     global _tool_memory

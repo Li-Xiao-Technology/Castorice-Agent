@@ -158,10 +158,20 @@ class TestFileIOSafety:
         finally:
             os.unlink(name)
 
-    def test_no_allowed_paths_means_no_restriction(self):
+    def test_no_allowed_paths_uses_default_whitelist(self):
         path = os.path.join(self.tmpdir, "test.txt")
-        assert _is_path_safe(path, None)
-        assert _is_path_safe(path, [])
+        # 默认白名单包含工作目录，若临时目录不在白名单内则应放行
+        import os as _os
+        cwd = _os.getcwd()
+        abs_path = _os.path.abspath(path)
+        is_in_cwd = abs_path.startswith(cwd + _os.sep) or abs_path == cwd
+        result = _is_path_safe(path, None)
+        if is_in_cwd:
+            assert result, f"工作目录内的路径应放行"
+        else:
+            assert not result, f"工作目录外的路径应被拦截"
+        # 空列表等价于 None
+        assert _is_path_safe(path, []) == result
 
     def test_write_and_read(self):
         path = os.path.join(self.tmpdir, "test.txt")

@@ -22,11 +22,14 @@ IntentNode:
 
 import json
 import logging
+import sqlite3
 import threading
 import uuid
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
+
+from castorice.storage import SqliteStorage
 
 logger = logging.getLogger("Castorice.IntentTracker")
 
@@ -113,7 +116,7 @@ class IntentNode:
         self.last_mentioned = datetime.now(timezone.utc).isoformat()
 
 
-class IntentTracker:
+class IntentTracker(SqliteStorage):
     """
     意图追踪器
 
@@ -130,34 +133,11 @@ class IntentTracker:
         max_intents_per_session: int = 10,
         intent_expiry_days: int = 30,
     ):
-        self.db_path = db_path
+        super().__init__(db_path)
         self.max_intents_per_session = max_intents_per_session
         self.intent_expiry_days = intent_expiry_days
         self._lock = threading.Lock()
-        self._local = threading.local()
         self._init_db()
-
-    def _get_conn(self):
-        """thread-local SQLite 连接（复用，避免频繁创建/关闭）"""
-        import sqlite3
-        import os
-        if not hasattr(self._local, "conn"):
-            os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
-            conn = sqlite3.connect(self.db_path, timeout=30.0, check_same_thread=False)
-            conn.execute("PRAGMA journal_mode=WAL;")
-            conn.execute("PRAGMA synchronous=NORMAL;")
-            self._local.conn = conn
-        return self._local.conn
-
-    def close(self) -> None:
-        """关闭当前线程的连接"""
-        conn = getattr(self._local, "conn", None)
-        if conn is not None:
-            try:
-                conn.close()
-            except Exception:
-                pass
-            self._local.conn = None
 
     def _init_db(self):
         conn = self._get_conn()
@@ -237,24 +217,25 @@ class IntentTracker:
         """更新意图"""
         with self._lock:
             conn = self._get_conn()
+            conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM intents WHERE intent_id = ?", (intent_id,))
             row = cursor.fetchone()
             if not row:
-                        return None
+                return None
 
             intent = IntentNode.from_dict({
-                "intent_id": row[0],
-                "root_intent": row[1],
-                "sub_intents": json.loads(row[2] or "[]"),
-                "sub_tasks": json.loads(row[3] or "[]"),
-                "status": row[4],
-                "progress": row[5],
-                "last_mentioned": row[6],
-                "context": row[7],
-                "session_ids": json.loads(row[8] or "[]"),
-                "created_at": row[9],
-                "updated_at": row[10],
+                "intent_id": row["intent_id"],
+                "root_intent": row["root_intent"],
+                "sub_intents": json.loads(row["sub_intents"] or "[]"),
+                "sub_tasks": json.loads(row["sub_tasks"] or "[]"),
+                "status": row["status"],
+                "progress": row["progress"],
+                "last_mentioned": row["last_mentioned"],
+                "context": row["context"],
+                "session_ids": json.loads(row["session_ids"] or "[]"),
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
             })
 
             if root_intent:
@@ -297,6 +278,7 @@ class IntentTracker:
         """获取所有活跃意图"""
         with self._lock:
             conn = self._get_conn()
+            conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT * FROM intents WHERE status = 'active' ORDER BY last_mentioned DESC LIMIT ?",
@@ -309,6 +291,7 @@ class IntentTracker:
         """获取某个会话关联的意图"""
         with self._lock:
             conn = self._get_conn()
+            conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             # 使用 json_each() 精确匹配 JSON 数组元素，避免子串误报
             # 例如 session_id="123" 不会再匹配到包含 "1234" 的记录
@@ -326,6 +309,7 @@ class IntentTracker:
         with self._lock:
             cutoff = (datetime.now(timezone.utc) - timedelta(days=self.intent_expiry_days)).isoformat()
             conn = self._get_conn()
+            conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT * FROM intents WHERE last_mentioned < ? AND status != 'completed'",
@@ -354,6 +338,7 @@ class IntentTracker:
         """根据ID获取意图"""
         with self._lock:
             conn = self._get_conn()
+            conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM intents WHERE intent_id = ?", (intent_id,))
             row = cursor.fetchone()
@@ -372,17 +357,17 @@ class IntentTracker:
     def _row_to_intent(self, row) -> IntentNode:
         """SQL行转IntentNode"""
         return IntentNode.from_dict({
-            "intent_id": row[0],
-            "root_intent": row[1],
-            "sub_intents": json.loads(row[2] or "[]"),
-            "sub_tasks": json.loads(row[3] or "[]"),
-            "status": row[4],
-            "progress": row[5],
-            "last_mentioned": row[6],
-            "context": row[7],
-            "session_ids": json.loads(row[8] or "[]"),
-            "created_at": row[9],
-            "updated_at": row[10],
+            "intent_id": row["intent_id"],
+            "root_intent": row["root_intent"],
+            "sub_intents": json.loads(row["sub_intents"] or "[]"),
+            "sub_tasks": json.loads(row["sub_tasks"] or "[]"),
+            "status": row["status"],
+            "progress": row["progress"],
+            "last_mentioned": row["last_mentioned"],
+            "context": row["context"],
+            "session_ids": json.loads(row["session_ids"] or "[]"),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
         })
 
     def to_prompt(self, session_id: str = "", max_intents: int = 5) -> str:

@@ -55,7 +55,7 @@ def _load_yaml_config(config_path: Optional[str] = None) -> Dict[str, Any]:
 
 # 支持的 LLM 供应商列表
 _SUPPORTED_LLM_PROVIDERS = {
-    "openai", "anthropic", "ollama", "openrouter", "gemini", "qwen",
+    "openai", "anthropic", "ollama", "openrouter", "gemini", "qwen", "freellmapi",
 }
 
 # 支持的长期记忆后端列表
@@ -266,6 +266,7 @@ class Config:
             "openrouter": ("openrouter", "api_key", "OPENROUTER_API_KEY"),
             "gemini": ("gemini", "api_key", "GEMINI_API_KEY"),
             "qwen": ("qwen", "api_key", "QWEN_API_KEY"),
+            "freellmapi": ("freellmapi", "api_key", "FREELLMAPI_API_KEY"),
         }
 
         logger = logging.getLogger("Castorice.Config")
@@ -351,6 +352,11 @@ class Config:
                 "api_key": os.getenv("QWEN_API_KEY", ""),
                 "model": os.getenv("QWEN_MODEL", "qwen-plus"),
             },
+            "freellmapi": {
+                "api_key": os.getenv("FREELLMAPI_API_KEY", ""),
+                "base_url": os.getenv("FREELLMAPI_BASE_URL", "http://127.0.0.1:31415/v1"),
+                "model": os.getenv("FREELLMAPI_MODEL", "auto"),
+            },
         }
 
         self._yaml["llm"] = llm_config
@@ -373,8 +379,12 @@ class Config:
             qq_cfg["sandbox"] = sandbox
 
         # 解析 Intent 配置
-        intent_config = qq_cfg.get("intent", "basic")
-        qq_cfg["intent_value"] = self._parse_intent(intent_config)
+        # 优先使用已配置的 intent_value（整数），否则从 intent（字符串预设）解析
+        if "intent_value" in qq_cfg:
+            qq_cfg["intent_value"] = int(qq_cfg["intent_value"])
+        else:
+            intent_config = qq_cfg.get("intent", "basic")
+            qq_cfg["intent_value"] = self._parse_intent(intent_config)
 
         self._yaml["qq_bot"] = qq_cfg
 
@@ -423,8 +433,41 @@ class Config:
         """返回原始字典"""
         return self._yaml
 
+    def update_llm_runtime(self, updates: Dict[str, Any]) -> Dict[str, Any]:
+        """运行时更新 LLM 配置（立即生效，不写入文件）
+
+        支持的参数：temperature, max_tokens, timeout, provider
+        返回更新后的 llm 配置段
+        """
+        if "llm" not in self._yaml or not isinstance(self._yaml["llm"], dict):
+            self._yaml["llm"] = {}
+        llm = self._yaml["llm"]
+
+        applied = {}
+        for key in ("temperature", "max_tokens", "timeout", "provider"):
+            if key in updates and updates[key] is not None:
+                if key == "temperature":
+                    llm[key] = float(updates[key])
+                elif key in ("max_tokens", "timeout"):
+                    llm[key] = int(updates[key])
+                else:
+                    llm[key] = str(updates[key])
+                applied[key] = llm[key]
+
+        log = logging.getLogger("Castorice.Config")
+        if applied:
+            log.info(f"LLM 配置运行时更新: {applied}")
+        return llm
+
 
 _config_lock = threading.Lock()
+
+
+def set_config(instance: Config) -> None:
+    """手动设置全局 Config 实例（Agent 初始化时调用，确保配置生效）"""
+    global _global_config
+    with _config_lock:
+        _global_config = instance
 
 
 def get_config(config_path: Optional[str] = None) -> Config:

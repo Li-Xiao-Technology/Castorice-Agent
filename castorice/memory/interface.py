@@ -261,6 +261,7 @@ class MemoryFactory:
                         )
                         return [{"text": r["metadata"].get("text", ""), "metadata": r["metadata"]} for r in results["matches"]]
                     except Exception:
+                        logger.debug(f"静默异常 [castorice/memory/interface.py:263]")
                         return []
                 
                 def clear(self) -> None:
@@ -274,6 +275,7 @@ class MemoryFactory:
                     try:
                         return self._index.describe_index_stats()["total_vector_count"]
                     except Exception:
+                        logger.debug(f"静默异常 [castorice/memory/interface.py:277]")
                         return 0
                 
                 @property
@@ -409,6 +411,7 @@ class MemoryFactory:
                                 output.append({"text": self._texts[i], "metadata": meta})
                         return output
                     except Exception:
+                        logger.debug(f"静默异常 [castorice/memory/interface.py:413]")
                         return []
                 
                 def clear(self) -> None:

@@ -42,6 +42,11 @@ memory/user_profile.json
 .DS_Store
 Thumbs.db
 
+# uv toolchain binaries (platform-specific)
+uv.exe
+uvw.exe
+uvx.exe
+
 # Logs
 *.log
 logs/

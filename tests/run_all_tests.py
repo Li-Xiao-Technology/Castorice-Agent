@@ -158,23 +158,13 @@ if __name__ == "__main__":
     print("=" * 40)
 
     import pytest
+    import os
 
-    pytest_files = [
-        "tests/test_agent_core.py",
-        "tests/test_self_modules.py",
-        "tests/test_emotion.py",
-        "tests/test_reflection.py",
-        "tests/test_model_adapter.py",
-        "tests/test_intent_tracker.py",
-        "tests/test_social_relation.py",
-        "tests/test_autobiographical.py",
-        "tests/test_memory.py",
-        "tests/test_tools.py",
-        "tests/test_security_file_guard.py",
-        "tests/test_security_pattern_detector.py",
-        "tests/test_security_rollback.py",
-        "tests/test_security_authorization.py",
-    ]
+    tests_dir = os.path.join(os.path.dirname(__file__))
+    pytest_files = []
+    for f in sorted(os.listdir(tests_dir)):
+        if f.startswith("test_") and f.endswith(".py") and f != "run_all_tests.py":
+            pytest_files.append(os.path.join("tests", f))
 
     exit_code = pytest.main(pytest_files + ["-v", "--tb=short"])
     if exit_code != 0:

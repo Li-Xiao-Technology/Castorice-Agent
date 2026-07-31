@@ -19,7 +19,7 @@ import os
 import threading
 import time
 from collections import deque
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("Castorice.Security.Rollback")
 
@@ -46,6 +46,15 @@ class RollbackManager:
         self._last_rollback_ts: float = 0
         self._rollback_history: List[Dict[str, Any]] = []
         self._cooldown_seconds = 600  # 回滚冷却 10 分钟
+        self._paused = False
+
+    def pause(self):
+        """暂停自动回滚"""
+        self._paused = True
+
+    def resume(self):
+        """恢复自动回滚"""
+        self._paused = False
 
     def record_task(self, success: bool) -> None:
         """记录一次任务结果"""
@@ -61,7 +70,7 @@ class RollbackManager:
         with self._lock:
             self._error_results.append({"msg": error_msg[:200], "ts": time.time()})
 
-    def should_rollback(self) -> tuple:
+    def should_rollback(self) -> Tuple[bool, str]:
         """
         检查是否应该触发自动回滚
 
@@ -104,6 +113,9 @@ class RollbackManager:
     def mark_rollback(self, reason: str, rolled_back_items: List[str]) -> None:
         """记录一次回滚事件"""
         with self._lock:
+            if self._paused:
+                logger.info("[回滚] 已暂停，跳过回滚记录")
+                return
             self._last_rollback_ts = time.time()
             self._rollback_history.append({
                 "reason": reason,
@@ -113,6 +125,8 @@ class RollbackManager:
             # 仅保留最近 20 次
             if len(self._rollback_history) > 20:
                 self._rollback_history = self._rollback_history[-20:]
+            # 重置连续失败计数，避免回滚冷却结束后立刻再次触发回滚
+            self._consecutive_failures = 0
 
     def get_status(self) -> Dict[str, Any]:
         """获取回滚管理器状态"""
@@ -136,6 +150,13 @@ class RollbackManager:
 # 全局单例
 _rollback_mgr: Optional[RollbackManager] = None
 _rollback_lock = threading.Lock()
+
+
+def set_rollback_manager(instance: RollbackManager) -> None:
+    """手动设置全局回滚管理器（Agent 初始化时调用，确保配置生效）"""
+    global _rollback_mgr
+    with _rollback_lock:
+        _rollback_mgr = instance
 
 
 def get_rollback_manager() -> RollbackManager:
