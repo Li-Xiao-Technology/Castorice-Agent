@@ -1,0 +1,125 @@
+[project]
+name = "castorice-agent"
+version = "3.3.0"
+description = "自主进化的 AI Agent 框架 - 人格数据主权 + 情感底色 + 元反射性学习 + 自主思考循环，零 LangGraph 依赖"
+authors = [{ name = "Lixiao" }]
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+
+# ========== 精简后的核心依赖 ==========
+# 1. 官方大模型 SDK（直接对接，弃用 langchain-openai / langchain-anthropic）
+# 2. 必要基础设施（pyyaml / dotenv / httpx）
+# 3. 工具生态（文档解析、沙箱）
+# 4. 向量记忆（按需安装）
+dependencies = [
+    # LLM 官方 SDK
+    "openai>=1.50.0",                  # OpenAI 官方 SDK
+    "anthropic>=0.39.0",                # Anthropic Claude 官方 SDK
+    # HTTP 与配置
+    "httpx>=0.27.0",                    # 异步 HTTP 客户端
+    "pyyaml>=6.0.1",                    # YAML 配置解析
+    "python-dotenv>=1.0.0",             # .env 环境变量加载
+    "pydantic>=2.7.0",                  # 数据校验
+    # Token 计数（P1-30: 精确 token 统计）
+    "tiktoken>=0.7.0",                  # OpenAI tokenizer，用于精确 token 计数
+    # 工具与文档解析
+    "pypdf>=4.2.0",                     # PDF 文档读取
+    "python-docx>=1.1.0",               # Word 文档读取
+    "openpyxl>=3.1.0",                  # Excel 文档读取
+    "rich>=13.7.0",                     # 终端美化输出
+    # 联网搜索
+    "ddgs>=9.0.0",                      # DuckDuckGo 搜索（web_search 工具依赖）
+    # 长期记忆（向量数据库，默认启用）
+    "chromadb>=0.5.0",                  # 向量数据库引擎
+    "sentence-transformers>=3.0.0",     # 本地嵌入模型
+    # 工具热更新
+    "watchdog>=4.0.0",                  # 文件监控（自动热更新）
+]
+
+[project.optional-dependencies]
+# HTTP API 服务器
+http = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+]
+# Ollama 本地模型
+ollama = [
+    "httpx>=0.27.0",
+]
+# IM 扩展（Telegram / Discord / QQ）
+im = [
+    "python-telegram-bot>=21.0",
+    "discord.py>=2.3.0",
+    "websockets>=12.0",
+]
+# QQ 机器人（QQ 开放平台）
+qq = [
+    "websockets>=12.0",
+    "httpx>=0.27.0",
+]
+# 开发调试
+dev = [
+    "ipython>=8.25.0",
+    "pytest>=8.2.0",
+    "watchdog>=4.0.0",
+]
+# LangChain 生态（桥接第三方工具/文档加载器）
+langchain = [
+    "langchain-core>=0.1.0",
+    "langchain-community>=0.2.0",
+]
+# Google Gemini 原生 SDK
+gemini = [
+    "google-genai>=0.5.0",
+]
+# 阿里云通义千问原生 SDK
+qwen = [
+    "dashscope>=1.14.0",
+]
+# Pinecone 向量数据库
+pinecone = [
+    "pinecone-client>=3.0.0",
+    "sentence-transformers>=3.0.0",
+]
+# FAISS 向量数据库
+faiss = [
+    "faiss-cpu>=1.8.0",
+    "sentence-transformers>=3.0.0",
+]
+# 多模态支持（图片理解、语音合成）
+multimodal = [
+    "pillow>=10.0.0",
+    "transformers>=4.40.0",
+    "torch>=2.2.0",
+]
+# 完整生态（包含所有可选依赖）
+full = [
+    "castorice-agent[http]",
+    "castorice-agent[langchain]",
+    "castorice-agent[gemini]",
+    "castorice-agent[qwen]",
+    "castorice-agent[pinecone]",
+    "castorice-agent[faiss]",
+    "castorice-agent[multimodal]",
+    "castorice-agent[im]",
+    "castorice-agent[qq]",
+]
+
+[project.scripts]
+# 一键安装后可直接调用：castorice
+castorice = "castorice.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["castorice"]
+
+[tool.uv]
+# uv 包管理器专属配置
+dev-dependencies = [
+    "pytest>=8.2.0",
+    "ipython>=8.25.0",
+]

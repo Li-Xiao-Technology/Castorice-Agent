@@ -1,0 +1,67 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+.env.local
+
+# Runtime data (contains user conversations & memories)
+castorice_data/
+castorice_logs/
+journals/
+experiments/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+chromadb/
+
+# User profile data (contains real user information)
+memory/user_profile.json
+
+# Configuration (sensitive - DO NOT COMMIT)
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Node.js
+.corepack/
+
+# uv toolchain binaries (platform-specific)
+uv.exe
+uvw.exe
+uvx.exe
+
+# Logs
+*.log
+logs/
+
+# Process lock
+.castorice_running.pid
+
+# Backup directories (contains sensitive data)
+backup/
+backups/
+backup_*/
+backup_*/**
+
+# Model cache
+.cache/
