@@ -1,14 +1,17 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use serde::{Deserialize, Serialize};
+use tauri::Manager;
 
 const BACKEND_PORT: u16 = 5477;
 const READINESS_TIMEOUT_SECS: u64 = 120;
 const HEALTH_CHECK_INTERVAL_SECS: u64 = 5;
+const SIDECAR_NAME: &str = "castorice-backend";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct BackendStatus {
@@ -25,9 +28,44 @@ struct BackendInner {
     process: Arc<Mutex<Option<Child>>>,
     project_root: std::path::PathBuf,
     stop_monitor: Arc<Mutex<bool>>,
+    app_handle: Option<tauri::AppHandle>,
 }
 
-fn spawn_backend(project_root: &std::path::Path) -> std::io::Result<Child> {
+fn get_data_dir(app_handle: Option<&tauri::AppHandle>) -> PathBuf {
+    if let Some(handle) = app_handle {
+        if let Ok(dir) = handle.path().app_data_dir() {
+            let _ = std::fs::create_dir_all(&dir);
+            return dir;
+        }
+    }
+    let dir = std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("castorice_data");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+fn spawn_backend(project_root: &Path, app_handle: Option<&tauri::AppHandle>) -> std::io::Result<Child> {
+    let data_dir = get_data_dir(app_handle);
+
+    // 优先尝试资源目录模式（打包后，后端在 resources/castorice-backend/ 下）
+    if let Some(handle) = app_handle {
+        if let Ok(resource_dir) = handle.path().resource_dir() {
+            let exe_path = resource_dir.join("castorice-backend").join(format!("{}.exe", SIDECAR_NAME));
+            if exe_path.exists() {
+                eprintln!("[Castorice] 使用资源目录模式: {:?}", exe_path);
+                return Command::new(&exe_path)
+                    .args(["--mode", "http"])
+                    .current_dir(&data_dir)
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn();
+            }
+        }
+    }
+
+    // 开发模式：使用系统 Python
+    eprintln!("[Castorice] 使用开发模式 (Python)");
     Command::new("python")
         .args(["-m", "castorice.main", "--mode", "http"])
         .current_dir(project_root)
@@ -102,7 +140,8 @@ fn start_backend(state: tauri::State<BackendState>) -> Result<BackendStatus, Str
         *process_guard = None;
     }
 
-    let child = spawn_backend(&inner.project_root)
+    let app_handle = inner.app_handle.as_ref();
+    let child = spawn_backend(&inner.project_root, app_handle)
         .map_err(|e| format!("启动后端失败: {}. 请确保已安装 Python 并安装了 castorice-agent 包。", e))?;
 
     *process_guard = Some(child);
@@ -165,6 +204,7 @@ fn start_monitor(inner: Arc<BackendInner>) {
     let process = inner.process.clone();
     let project_root = inner.project_root.clone();
     let stop_flag = inner.stop_monitor.clone();
+    let app_handle = inner.app_handle.clone();
 
     thread::spawn(move || loop {
         {
@@ -198,7 +238,8 @@ fn start_monitor(inner: Arc<BackendInner>) {
 
             if needs_restart {
                 eprintln!("[Castorice] 后端进程意外退出，正在重启...");
-                match spawn_backend(&project_root) {
+                let handle_ref = app_handle.as_ref();
+                match spawn_backend(&project_root, handle_ref) {
                     Ok(new_child) => {
                         *guard = Some(new_child);
                         drop(guard);
@@ -223,49 +264,49 @@ fn start_monitor(inner: Arc<BackendInner>) {
 pub fn run() {
     let project_root = find_project_root();
 
-    let inner = Arc::new(BackendInner {
-        process: Arc::new(Mutex::new(None)),
-        project_root: project_root.clone(),
-        stop_monitor: Arc::new(Mutex::new(false)),
-    });
-
-    let tauri_state = BackendState {
-        inner: inner.clone(),
-    };
-
-    let monitor_inner = inner.clone();
-    start_monitor(monitor_inner);
-
-    let spawn_inner = inner.clone();
-    thread::spawn(move || {
-        let mut guard = spawn_inner.process.lock().unwrap();
-        if guard.is_none() {
-            match spawn_backend(&spawn_inner.project_root) {
-                Ok(child) => {
-                    *guard = Some(child);
-                    drop(guard);
-                    if wait_for_backend_ready(BACKEND_PORT, READINESS_TIMEOUT_SECS) {
-                        eprintln!("[Castorice] 后端已就绪");
-                    } else {
-                        eprintln!("[Castorice] 后端启动超时");
-                    }
-                }
-                Err(e) => {
-                    eprintln!("[Castorice] 后端启动失败: {}", e);
-                }
-            }
-        }
-    });
-
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
-        .manage(tauri_state)
-        .invoke_handler(tauri::generate_handler![
-            start_backend,
-            stop_backend,
-            get_backend_status,
-        ])
-        .setup(|app| {
+        .setup(move |app| {
+            let app_handle = app.handle().clone();
+
+            let inner = Arc::new(BackendInner {
+                process: Arc::new(Mutex::new(None)),
+                project_root: project_root.clone(),
+                stop_monitor: Arc::new(Mutex::new(false)),
+                app_handle: Some(app_handle.clone()),
+            });
+
+            let tauri_state = BackendState {
+                inner: inner.clone(),
+            };
+
+            let monitor_inner = inner.clone();
+            start_monitor(monitor_inner);
+
+            let spawn_inner = inner.clone();
+            let spawn_handle = app_handle.clone();
+            thread::spawn(move || {
+                let mut guard = spawn_inner.process.lock().unwrap();
+                if guard.is_none() {
+                    match spawn_backend(&spawn_inner.project_root, Some(&spawn_handle)) {
+                        Ok(child) => {
+                            *guard = Some(child);
+                            drop(guard);
+                            if wait_for_backend_ready(BACKEND_PORT, READINESS_TIMEOUT_SECS) {
+                                eprintln!("[Castorice] 后端已就绪");
+                            } else {
+                                eprintln!("[Castorice] 后端启动超时");
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("[Castorice] 后端启动失败: {}", e);
+                        }
+                    }
+                }
+            });
+
+            app.manage(tauri_state);
+
             #[cfg(desktop)]
             {
                 use tauri_plugin_notification::NotificationExt;
@@ -278,6 +319,11 @@ pub fn run() {
             }
             Ok(())
         })
+        .invoke_handler(tauri::generate_handler![
+            start_backend,
+            stop_backend,
+            get_backend_status,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

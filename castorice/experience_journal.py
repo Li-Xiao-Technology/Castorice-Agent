@@ -182,6 +182,35 @@ class ExperienceJournal(SqliteStorage):
         )
         return self.add(exp)
 
+    def record_learning_meta_experience(
+        self,
+        task_context_signature: str,
+        strategy_used: str,
+        outcome_quality: float,
+        session_id: str = "",
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """记录学习元经验：(任务上下文签名, 使用的策略, 结果质量) 用于元反射性学习。
+        此方法不强制任何行为，仅供元学习系统被动记录学习历史。
+        """
+        import json
+        from datetime import datetime, timezone
+        exp = Experience(
+            content=f"学习元经验：任务='{task_context_signature[:50]}...', 策略='{strategy_used}', 质量={outcome_quality:.2f}",
+            memory_type="reflective",
+            importance=max(1.0, min(10.0, 2.0 + outcome_quality * 6.0)),  # 基于质量映射重要性 2-8
+            emotional_valence=0.0,  # 元经验通常中性
+            session_id=session_id,
+            metadata={
+                "type": "learning_meta",
+                "task_context": task_context_signature,
+                "strategy": strategy_used,
+                "outcome_quality": outcome_quality,
+                **(metadata or {}),
+            },
+        )
+        return self.add(exp)
+
     def _evict_if_needed(self) -> None:
         """LRU 淘汰：超出上限时删除最旧且最不重要的"""
         # 注意：此方法在 add() 的锁内调用，不需要额外加锁

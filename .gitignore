@@ -1,9 +1,6 @@
 # Python
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
-.Python
 *.egg-info/
 .eggs/
 build/
@@ -16,13 +13,16 @@ dist/
 # Virtual environments
 venv/
 .venv/
-env/
 .env.local
 
 # Runtime data (contains user conversations & memories)
 castorice_data/
 castorice_logs/
+journals/
+experiments/
 *.db
+*.db-wal
+*.db-shm
 *.sqlite
 *.sqlite3
 chromadb/
@@ -42,6 +42,9 @@ memory/user_profile.json
 .DS_Store
 Thumbs.db
 
+# Node.js
+.corepack/
+
 # uv toolchain binaries (platform-specific)
 uv.exe
 uvw.exe
@@ -51,8 +54,10 @@ uvx.exe
 *.log
 logs/
 
+# Process lock
+.castorice_running.pid
+
 # Backup directories (contains sensitive data)
-backup_for_upload/
 backup/
 backups/
 backup_*/

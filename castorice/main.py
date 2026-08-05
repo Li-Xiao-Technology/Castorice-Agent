@@ -39,9 +39,12 @@ class JsonLogFormatter(logging.Formatter):
 
 
 def setup_logging(config: Optional[Dict[str, Any]] = None) -> None:
-    """配置根日志器（支持文本/JSON 格式）"""
-    os.makedirs("./castorice_data", exist_ok=True)
+    """
+    配置根日志器（支持文本/JSON 格式）。
 
+    统一委托给 castorice.logger.setup_logging 作为单一入口，
+    避免两套日志系统并存导致 handler 重复。
+    """
     log_cfg = config.get("logging", {}) if isinstance(config, dict) else {}
     level = log_cfg.get("level", "INFO").upper()
     log_format = log_cfg.get("format", "text").lower()
@@ -50,44 +53,23 @@ def setup_logging(config: Optional[Dict[str, Any]] = None) -> None:
     backup_count = log_cfg.get("backup_count", 5)
 
     os.makedirs(log_dir, exist_ok=True)
-    file_path = os.path.join(log_dir, "castorice.log")
+    log_file = os.path.join(log_dir, "castorice.log")
 
-    handlers = []
-
-    console_handler = logging.StreamHandler()
-    if log_format == "json":
-        console_handler.setFormatter(JsonLogFormatter(datefmt="%Y-%m-%d %H:%M:%S"))
-    else:
-        console_handler.setFormatter(logging.Formatter(
-            "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S"
-        ))
-    handlers.append(console_handler)
-
-    try:
-        from logging.handlers import RotatingFileHandler
-        file_handler = RotatingFileHandler(
-            file_path,
-            maxBytes=max_size_mb * 1024 * 1024,
-            backupCount=backup_count,
-            encoding="utf-8",
-        )
-        if log_format == "json":
-            file_handler.setFormatter(JsonLogFormatter(datefmt="%Y-%m-%d %H:%M:%S"))
-        else:
-            file_handler.setFormatter(logging.Formatter(
-                "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-                datefmt="%Y-%m-%d %H:%M:%S"
-            ))
-        handlers.append(file_handler)
-    except ImportError:
-        file_handler = logging.FileHandler(file_path, encoding="utf-8")
-        handlers.append(file_handler)
-
-    logging.basicConfig(
-        level=getattr(logging, level, logging.INFO),
-        handlers=handlers,
+    # 委托给统一日志入口
+    from castorice.logger import setup_logging as _unified_setup
+    _unified_setup(
+        level=level,
+        log_file=log_file,
+        max_bytes=max_size_mb * 1024 * 1024,
+        backup_count=backup_count,
+        use_color=(log_format != "json"),
     )
+
+    # JSON 格式：额外给已有 handler 套一层 JsonLogFormatter
+    if log_format == "json":
+        root = logging.getLogger()
+        for h in root.handlers:
+            h.setFormatter(JsonLogFormatter(datefmt="%Y-%m-%d %H:%M:%S"))
 
 
 def main():

@@ -16,7 +16,7 @@ import logging
 import re
 import threading
 import time
-from collections import deque
+from collections import deque, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Deque, Dict, List, Optional, Tuple
@@ -59,6 +59,95 @@ class AnswerQuality:
     issues: List[str] = field(default_factory=list)
     improvement_suggestions: List[str] = field(default_factory=list)
     is_small_talk: bool = False
+
+
+class Beta:
+    """Beta 分布，用于贝叶斯推断学习策略效果"""
+    
+    def __init__(self, alpha: float = 1.0, beta: float = 1.0):
+        self.alpha = alpha  # 成功次数 + 1 (先验)
+        self.beta = beta    # 失败次数 + 1 (先验)
+    
+    def update(self, success: bool) -> 'Beta':
+        """根据观察结果更新分布，返回新的 Beta 实例"""
+        if success:
+            return Beta(self.alpha + 1, self.beta)
+        else:
+            return Beta(self.alpha, self.beta + 1)
+    
+    def sample(self) -> float:
+        """从 Beta 分布抽样（这里用均值近似，实际可用更复杂的采样）"""
+        # 为了简单和确定性，使用均值作为代表值
+        # 在实际应用中可以使用 numpy.random.beta 或其他采样方法
+        return self.alpha / (self.alpha + self.beta)
+    
+    def mean(self) -> float:
+        """获取均值"""
+        return self.alpha / (self.alpha + self.beta)
+
+
+class BayesianLearningStrategist:
+    """贝叶斯学习策略推断器：学习哪种学习策略在什么情境下最有效"""
+    
+    def __init__(self):
+        # 为每种 (任务上下文, 策略) 对维护一个 Beta 分布
+        # 键格式: (task_context_hash, strategy_name) -> Beta分布
+        self.strategy_priors: Dict[Tuple[str, str], Beta] = defaultdict(lambda: Beta(1, 1))
+        self._lock = threading.RLock()
+    
+    def update(self, task_context: str, strategy: str, outcome_quality: float) -> None:
+        """根据学习结果更新策略效果的贝叶斯估计
+        
+        参数:
+        -----
+        task_context: str
+            任务的上下文描述（例如 "解释量子力学时用户出现困惑"）
+        strategy: str
+            使用的学习策略名称（例如 "基于类比"、"基于反馈调整"）
+        outcome_quality: float
+            结果质量评分，范围 0.0~1.0
+        """
+        with self._lock:
+            # 创建一个稳定的哈希用于字典键（避免非常长的字符串）
+            import hashlib
+            context_hash = hashlib.md5(task_context.encode('utf-8')).hexdigest()[:8]
+            key = (context_hash, strategy)
+            
+            # 将质量分数转换为二元反馈（阈值0.5），或者可以考虑使用连续值的变体
+            success = outcome_quality > 0.5
+            self.strategy_priors[key] = self.strategy_priors[key].update(success)
+    
+    def recommend(self, task_context: str) -> Optional[str]:
+        """基于贝叶斯推荐在给定任务上下文中可能最有效的策略
+        
+        参数:
+        -----
+        task_context: str
+            当前任务的上下文描述
+            
+        返回:
+        -----
+        str 或 None
+            推荐的策略名称；如果没有历史数据则返回 None
+        """
+        with self._lock:
+            import hashlib
+            context_hash = hashlib.md5(task_context.encode('utf-8')).hexdigest()[:8]
+            
+            # 找到所有与此上下文相关的策略
+            candidates = []
+            for (ctx_hash, strategy), beta_dist in self.strategy_priors.items():
+                if ctx_hash == context_hash:
+                    # 使用均值作为估计的成功概率
+                    success_prob = beta_dist.mean()
+                    candidates.append((strategy, success_prob))
+            
+            if not candidates:
+                return None
+            
+            # 选择成功概率最高的策略
+            best_strategy = max(candidates, key=lambda x: x[1])[0]
+            return best_strategy
 
 
 class Metacognition(SqliteStorage):

@@ -398,17 +398,41 @@ class ConsciousnessEngine:
 
             system_prompt = "\n".join(ctx_parts)
 
-            # 调用 LLM 生成念头
+            # 调用 LLM 生成念头（带超时保护，避免卡死意识引擎）
             model = getattr(self.agent, "model", None) or getattr(self.engine, "model_adapter", None)
             if model is None:
+                logger.warning("_generate_thought: model 为 None，跳过")
                 return None
 
-            response = model.chat([
-                ChatMessage(role="system", content=system_prompt),
-                ChatMessage(role="user", content="现在心里在想什么？用一两句话自然表达。"),
-            ])
+            logger.info(f"[念头] 开始生成 | system_prompt={len(system_prompt)}chars | model_type={type(model).__name__}")
+            _t0 = time.time()
+
+            import concurrent.futures
+            _thought_executor = getattr(self, '_thought_executor', None)
+            if _thought_executor is None:
+                _thought_executor = concurrent.futures.ThreadPoolExecutor(
+                    max_workers=1, thread_name_prefix="ConsciousnessThink")
+                self._thought_executor = _thought_executor
+
+            try:
+                _future = _thought_executor.submit(
+                    lambda: model.chat([
+                        ChatMessage(role="system", content=system_prompt),
+                        ChatMessage(role="user", content="现在心里在想什么？用一两句话自然表达。"),
+                    ])
+                )
+                response = _future.result(timeout=60)
+            except concurrent.futures.TimeoutError:
+                logger.warning("念头生成超时(>60s)，跳过本次")
+                return None
+            except Exception as e:
+                logger.warning(f"念头生成异常: {type(e).__name__}: {e}")
+                return None
+            _dt = time.time() - _t0
             content = getattr(response, "content", str(response)).strip()
+            logger.info(f"[念头] LLM返回 | 耗时={_dt:.1f}s | content_len={len(content)} | resp_type={type(response).__name__}")
             if not content:
+                logger.info("[念头] 内容为空，跳过")
                 return None
 
             # 基于生理节律和情绪计算属性（不再纯随机）
@@ -489,11 +513,16 @@ class ConsciousnessEngine:
             self._ready = False
 
     def _main_loop(self) -> None:
+        _loop_count = 0
         while self._running:
             try:
+                _loop_count += 1
+                if _loop_count <= 3 or _loop_count % 10 == 0:
+                    logger.info(f"[意识引擎心跳] 第{_loop_count}轮 | running={self._running} enabled={self._enabled} mode={self._mode}")
                 self._check_and_update_mode()
 
                 if not self._enabled:
+                    logger.debug(f"[意识引擎] 未启用，等待30s (loop={_loop_count})")
                     self._stop_event.wait(30)
                     continue
 
@@ -626,15 +655,33 @@ class ConsciousnessEngine:
             if model is None:
                 return thought.content[:80]
 
-            response = model.chat([
-                ChatMessage(role="system", content=(
-                    f"把下面这个内在念头转化为对用户说的一句话。\n"
-                    f"风格: {style}\n"
-                    f"关系: {relation_note}\n"
-                    f"要求: 自然、口语化、不生硬、不要超过 50 字"
-                )),
-                ChatMessage(role="user", content=f"念头: {thought.content}"),
-            ])
+            # 带超时保护的 LLM 调用，避免卡死意识引擎
+            import concurrent.futures
+            _speech_executor = getattr(self, '_speech_executor', None)
+            if _speech_executor is None:
+                _speech_executor = concurrent.futures.ThreadPoolExecutor(
+                    max_workers=1, thread_name_prefix="ConsciousnessSpeech")
+                self._speech_executor = _speech_executor
+            try:
+                _future = _speech_executor.submit(
+                    lambda: model.chat([
+                        ChatMessage(role="system", content=(
+                            f"把下面这个内在念头转化为对用户说的一句话。\n"
+                            f"风格: {style}\n"
+                            f"关系: {relation_note}\n"
+                            f"要求: 自然、口语化、不生硬、不要超过 50 字"
+                        )),
+                        ChatMessage(role="user", content=f"念头: {thought.content}"),
+                    ])
+                )
+                response = _future.result(timeout=30)
+            except concurrent.futures.TimeoutError:
+                logger.debug("念头转说话超时(>30s)，返回原文")
+                return thought.content[:80]
+            except Exception as e:
+                logger.debug(f"念头转说话失败: {e}")
+                return thought.content[:80]
+
             content = getattr(response, "content", str(response)).strip()
             return content or thought.content[:80]
         except Exception as e:

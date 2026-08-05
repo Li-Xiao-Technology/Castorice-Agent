@@ -9,6 +9,8 @@ import SettingsPage from "./pages/SettingsPage";
 import MemoryPage from "./pages/MemoryPage";
 import ToolsPage from "./pages/ToolsPage";
 import SocialPage from "./pages/SocialPage";
+import MonitorPage from "./pages/MonitorPage";
+import SelfGrowthPage from "./pages/SelfGrowthPage";
 import { useAppStore } from "./stores/appStore";
 import api from "./services/api";
 import wsService from "./services/ws";
@@ -80,8 +82,15 @@ function App() {
               <Route path="consciousness" element={<ConsciousnessPage />} />
               <Route path="social" element={<SocialPage />} />
               <Route path="memory" element={<MemoryPage />} />
+              <Route path="growth" element={<SelfGrowthPage />} />
               <Route path="tools" element={<ToolsPage />} />
+              <Route path="monitor" element={<MonitorPage />} />
               <Route path="settings" element={<SettingsPage />} />
+              {/* 兼容旧路径 */}
+              <Route path="knowledge" element={<Navigate to="/growth" replace />} />
+              <Route path="personality" element={<Navigate to="/growth" replace />} />
+              <Route path="goals" element={<Navigate to="/growth" replace />} />
+              <Route path="budget" element={<Navigate to="/settings" replace />} />
             </Route>
           </Routes>
         </motion.div>

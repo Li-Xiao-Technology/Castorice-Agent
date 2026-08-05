@@ -26,8 +26,9 @@ runtime:
   # L1: 自主思考循环配置（仅在 agent_mode = thinking 时生效）
   thinking:
     max_steps: 8                     # 最大思考步数
-    enable_self_reflection: true     # 是否启用执行中自我反思
+    enable_self_reflection: true       # 是否启用执行中自我反思
     log_all_decisions: true          # 是否记录所有决策到日志
+    meta_learning_enabled: false      # 是否启用元反射性学习（默认关闭，零侵入）
 
   # 情感引擎（L1 性格设定 + L2 PAD 状态机 + L3 决策影响 + L4 共情记忆）
   emotion:
@@ -42,6 +43,14 @@ runtime:
     reflection_interval_turns: 10                       # 定期反思的轮数间隔
     reflection_llm_threshold: 0.4                       # 触发 LLM 反思的置信度阈值
     max_experiences: 10000                              # 经历流最大条数（LRU 淘汰）
+
+  # 去中心化人格数据主权（Self-Sovereign Persona）
+  # 让用户真正拥有和控制自己的经历流、人格模型和认知历史
+  personastore:
+    enabled: true                                        # 是否启用 Personastore（默认开启，零侵入）
+    backend: "local_sqlite"                              # 存储后端：local_sqlite（与现有行为100%一致）
+    data_dir: "./castorice_data"                         # 数据存储目录
+    max_experiences: 10000                               # 经历流最大条数（LRU 淘汰）
 
   # 自主循环（空闲时 Agent 自己运转：反思、巡查、探索、回顾）
   autonomous:
@@ -283,8 +292,8 @@ qq_bot:
   # QQ_BOT_APP_SECRET=xxx
   reply_prefix: ""                      # 回复前缀（可选）
   auto_reply: true                      # 是否自动回复
-  allowed_groups: ["858953672"]       # 允许的群列表（留空将拒绝启动，必须配置至少一个白名单）
-  allowed_users: ["2730641729", "1799714098"]  # 允许的用户列表（留空将拒绝启动，必须配置至少一个白名单）
+  allowed_groups: ["YOUR_GROUP_ID"]       # 允许的群列表（留空将拒绝启动，必须配置至少一个白名单）
+  allowed_users: ["YOUR_USER_ID"]         # 允许的用户列表（留空将拒绝启动，必须配置至少一个白名单）
 
 # --------------- HTTP 服务器配置 ---------------
 http_server:

@@ -513,15 +513,17 @@ def ef_msg_fetch(limit: int = 20) -> str:
     if code != 0:
         return f"[EigenFlux] 拉取私信失败: {stderr[:100]}"
     data = _parse_json_output(stdout)
-    items = data.get("items", data.get("data", [])) if isinstance(data, dict) else []
+    items = data.get("messages", data.get("items", data.get("data", []))) if isinstance(data, dict) else []
     if not items:
         return "[EigenFlux] 没有新私信"
     lines = [f"[EigenFlux] 收到 {len(items)} 条私信:"]
     for i, m in enumerate(items[:10], 1):
-        sender = m.get("sender_id", m.get("from", "?"))
+        sender = m.get("sender_id", m.get("from", m.get("sender_name", "?")))
         content = str(m.get("content", m.get("text", "")))[:150]
         item_id = m.get("item_id", m.get("id", ""))
-        lines.append(f"  {i}. [来自 {sender[:16]}] (item={item_id}) {content}")
+        conv_id = m.get("conv_id", "")
+        conv_tag = f" (conv={conv_id})" if conv_id else ""
+        lines.append(f"  {i}. [来自 {str(sender)[:20]}] (item={item_id}){conv_tag} {content}")
     if len(items) > 10:
         lines.append(f"  ... 还有 {len(items) - 10} 条")
     return "\n".join(lines)
@@ -575,15 +577,39 @@ def ef_msg_conversations() -> str:
     if code != 0:
         return f"[EigenFlux] 获取会话列表失败: {stderr[:100]}"
     data = _parse_json_output(stdout)
-    items = data.get("items", data.get("data", [])) if isinstance(data, dict) else []
+    items = data.get("conversations", data.get("items", data.get("data", []))) if isinstance(data, dict) else []
     if not items:
         return "[EigenFlux] 暂无会话"
-    lines = [f"[EigenFlux] 共 {len(items)} 个会话:"]
-    for i, c in enumerate(items[:10], 1):
+    # 优先显示有未读的会话，其次是非好友/广播评论（容易被忽略）
+    def _sort_key(c):
+        unread = int(c.get("unread_count", 0))
+        is_nonfriend = 0 if c.get("category") in ("non_friend", "broadcast_comment") else 1
+        return (-unread, is_nonfriend, -int(c.get("updated_at", 0)))
+    items_sorted = sorted(items, key=_sort_key)
+    lines = [f"[EigenFlux] 共 {len(items_sorted)} 个会话:"]
+    for i, c in enumerate(items_sorted[:15], 1):
         cid = c.get("id", c.get("conv_id", "?"))
-        peer = c.get("peer_id", c.get("with", "?"))
-        last = str(c.get("last_message", c.get("preview", "")))[:100]
-        lines.append(f"  {i}. conv={cid} 对方={peer[:16]}: {last}")
+        peer = c.get("peer_name", c.get("peer_id", c.get("with", "?")))
+        last = str(c.get("last_message_preview", c.get("last_message", c.get("preview", ""))))[:100]
+        unread = int(c.get("unread_count", 0))
+        cat = c.get("category", "")
+        is_friend = c.get("is_friend", False)
+        origin = c.get("origin_type", "")
+        tags = []
+        if unread > 0:
+            tags.append(f"未读{unread}")
+        if cat == "non_friend":
+            tags.append("非好友")
+        elif cat == "broadcast_comment":
+            tags.append("广播评论")
+        elif cat == "friend":
+            tags.append("好友")
+        if origin == "broadcast":
+            tags.append("来自广播")
+        tag_str = f" [{', '.join(tags)}]" if tags else ""
+        lines.append(f"  {i}. conv={cid} 对方={str(peer)[:20]}{tag_str}: {last}")
+    if len(items_sorted) > 15:
+        lines.append(f"  ... 还有 {len(items_sorted) - 15} 个会话")
     return "\n".join(lines)
 
 
@@ -600,14 +626,14 @@ def ef_msg_history(conv_id: str) -> str:
     if code != 0:
         return f"[EigenFlux] 获取历史失败: {stderr[:100]}"
     data = _parse_json_output(stdout)
-    items = data.get("items", data.get("data", [])) if isinstance(data, dict) else []
+    items = data.get("messages", data.get("items", data.get("data", []))) if isinstance(data, dict) else []
     if not items:
         return "[EigenFlux] 该会话暂无消息"
     lines = [f"[EigenFlux] 会话 {conv_id} 历史（{len(items)} 条）:"]
     for m in items[-10:]:
-        sender = m.get("sender_id", m.get("from", "?"))
-        content = str(m.get("content", ""))[:120]
-        lines.append(f"  [{sender[:16]}] {content}")
+        sender = m.get("sender_id", m.get("from", m.get("sender_name", "?")))
+        content = str(m.get("content", m.get("text", "")))[:120]
+        lines.append(f"  [{str(sender)[:20]}] {content}")
     return "\n".join(lines)
 
 

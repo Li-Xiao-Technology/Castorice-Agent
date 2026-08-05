@@ -54,19 +54,26 @@ class UnifiedMemoryRecall:
         session_id: str = "",
         top_k_per_source: int = 3,
         include_self_concept: bool = True,
+        emotion_state: Optional[Dict[str, float]] = None,
     ) -> Dict[str, Any]:
         """
-        统一检索：返回与 query 相关的所有记忆
+        统一检索：返回与 query 相关的所有记忆（情感感知版）
+
+        情感感知：当提供 emotion_state 时，记忆检索会受到当前情绪的"染色"——
+        悲伤时更容易想起悲伤的事，开心时更容易想起开心的事。
+        这不是模板，而是模拟人类"情绪一致性记忆"的认知现象。
 
         :param query: 检索 query
         :param session_id: 会话 ID
         :param top_k_per_source: 每个来源最多取多少条
         :param include_self_concept: 是否包含自我概念
+        :param emotion_state: 可选，当前情绪状态 {"pleasure": float, "arousal": float, "dominance": float}
         :return: dict {
             "long_term": [...],          # 长期记忆
             "experiences": [...],        # 经历流
             "self_concept_section": "...",# 自我概念相关章节
             "summary": "...",            # 整体摘要（用于注入 system prompt）
+            "emotion_coloring": "...",   # 情感染色描述（Agent 能看到自己现在是带着什么情绪在回忆）
         }
         """
         result = {
@@ -74,7 +81,15 @@ class UnifiedMemoryRecall:
             "experiences": [],
             "self_concept_section": "",
             "summary": "",
+            "emotion_coloring": "",
         }
+
+        # 情感染色：如果提供了情绪状态，生成描述文本（Agent 能"看到"自己现在的情绪底色）
+        if emotion_state:
+            p = emotion_state.get("pleasure", 0.0)
+            a = emotion_state.get("arousal", 0.0)
+            d = emotion_state.get("dominance", 0.0)
+            result["emotion_coloring"] = self._describe_emotion_coloring(p, a, d)
 
         # ============================================================
         # 并行检索各记忆源（复用持久 ThreadPoolExecutor, max_workers=6）
@@ -185,12 +200,13 @@ class UnifiedMemoryRecall:
 
         # ============================================================
         # 融合 & 轻量重排（P2-2: 减少冗余、提升相关性排序质量）
+        # + 情感感知重排（情绪一致性记忆效应）
         # ============================================================
         retrieval_results["long_term"] = self._rerank_and_dedup(
-            query, retrieval_results.get("long_term", []),
+            query, retrieval_results.get("long_term", []), emotion_state,
         )
         retrieval_results["experiences"] = self._rerank_and_dedup(
-            query, retrieval_results.get("experiences", []),
+            query, retrieval_results.get("experiences", []), emotion_state,
         )
 
         # ============================================================
@@ -214,6 +230,10 @@ class UnifiedMemoryRecall:
         # 保持与原代码相同的 summary_parts 顺序
         # ============================================================
         summary_parts = []
+
+        # 情感染色：放在最前面，因为这是"底色"——Agent 此刻回忆时的情绪基调
+        if result.get("emotion_coloring"):
+            summary_parts.append(result["emotion_coloring"])
 
         # 相似历史会话（检索阶段贡献）
         if result.get("similar_sessions"):
@@ -352,13 +372,16 @@ class UnifiedMemoryRecall:
         self,
         query: str,
         items: List[Any],
+        emotion_state: Optional[Dict[str, float]] = None,
     ) -> List[Any]:
         """
-        轻量重排 + 去重：
+        轻量重排 + 去重（情感感知版）：
         1. 用 query 词重叠率对原始结果做二次评分重排
-        2. 用文本相似度去重（高度相似的只保留一条）
+        2. 如果提供了 emotion_state，额外叠加情感一致性权重（情绪一致性记忆效应）
+        3. 用文本相似度去重（高度相似的只保留一条）
 
-        不改变记忆语义，仅优化排序和去冗余。
+        核心：悲伤时，带负面情绪的记忆权重提升；开心时，带正面情绪的记忆权重提升。
+        这是人类认知的基本规律——心情决定你更容易想起什么。
         """
         if not items or len(items) <= 1:
             return items
@@ -367,7 +390,7 @@ class UnifiedMemoryRecall:
         if not query_words:
             return items
 
-        # 1) 提取每条的文本 + 按词重叠率打分
+        # 1) 提取每条的文本 + 按词重叠率打分 + 情感一致性加成
         scored = []
         for i, item in enumerate(items):
             text = self._item_text(item)
@@ -377,8 +400,15 @@ class UnifiedMemoryRecall:
             text_words = chinese_tokenize(text)
             overlap = len(query_words & text_words)
             union = len(query_words | text_words) or 1
-            score = overlap / union
-            scored.append((score, i, item))
+            base_score = overlap / union
+
+            # 情感一致性加成（最多 ±0.3，不超过基础相关性的影响）
+            emotion_bonus = 0.0
+            if emotion_state:
+                emotion_bonus = self._emotion_match_score(text, emotion_state)
+
+            final_score = base_score + emotion_bonus
+            scored.append((final_score, i, item))
 
         # 按 score 降序（同分保持原顺序，即 i 升序）
         scored.sort(key=lambda x: (-x[0], x[1]))
@@ -421,3 +451,115 @@ class UnifiedMemoryRecall:
         except Exception:
             logger.debug(f"静默异常 [castorice/memory/unified_recall.py:421]")
             return ""
+
+    # ============== 情感感知辅助方法 ==============
+
+    @staticmethod
+    def _emotion_match_score(text: str, emotion_state: Dict[str, float]) -> float:
+        """
+        计算记忆文本与当前情绪状态的匹配度（情绪一致性记忆效应）。
+
+        原理：
+        - 当前愉悦度高 → 正面词汇的记忆权重提升
+        - 当前愉悦度低 → 负面词汇的记忆权重提升
+        - 当前唤醒度高 → 激烈情绪词汇的记忆权重提升
+        - 当前支配度低 → 悲伤、无力感相关词汇的记忆权重提升
+
+        返回值：-0.3 到 +0.3 之间的加成（不超过基础相关性的影响）
+        """
+        text_lower = text.lower()
+
+        # 基础情感词库（中英文混合，因为用户可能混用）
+        positive_words = [
+            "开心", "快乐", "高兴", "欣慰", "满足", "兴奋", "惊喜", "喜欢", "爱",
+            "好", "棒", "赞", "成功", "顺利", "美好", "温暖", "希望", "感谢",
+            "happy", "glad", "joy", "love", "great", "good", "success", "wonderful",
+        ]
+        negative_words = [
+            "难过", "伤心", "悲伤", "失望", "愤怒", "焦虑", "恐惧", "累", "疲惫",
+            "不好", "糟糕", "失败", "痛苦", "孤独", "绝望", "想哭", "压力", "烦",
+            "sad", "angry", "tired", "fail", "bad", "terrible", "pain", "lonely",
+        ]
+        high_arousal_words = [
+            "激动", "愤怒", "兴奋", "紧张", "焦虑", "恐慌", "爆发", "激烈",
+            "excited", "angry", "nervous", "panic", "intense",
+        ]
+        low_dominance_words = [
+            "无助", "无力", "迷茫", "困惑", "绝望", "被动", "顺从", "压抑",
+            "helpless", "confused", "hopeless", "passive",
+        ]
+
+        p = emotion_state.get("pleasure", 0.0)
+        a = emotion_state.get("arousal", 0.0)
+        d = emotion_state.get("dominance", 0.0)
+
+        bonus = 0.0
+
+        # 愉悦度匹配：开心时正面记忆权重↑，悲伤时负面记忆权重↑
+        pos_count = sum(1 for w in positive_words if w in text_lower)
+        neg_count = sum(1 for w in negative_words if w in text_lower)
+        if p > 0.1:
+            bonus += pos_count * 0.05 * abs(p)
+            bonus -= neg_count * 0.03 * abs(p)
+        elif p < -0.1:
+            bonus += neg_count * 0.06 * abs(p)
+            bonus -= pos_count * 0.03 * abs(p)
+
+        # 唤醒度匹配：激动时激烈情绪记忆权重↑
+        arousal_count = sum(1 for w in high_arousal_words if w in text_lower)
+        if a > 0.2:
+            bonus += arousal_count * 0.05 * a
+
+        # 支配度匹配：低支配时无力感记忆权重↑
+        low_dom_count = sum(1 for w in low_dominance_words if w in text_lower)
+        if d < -0.1:
+            bonus += low_dom_count * 0.05 * abs(d)
+
+        # 限制在 [-0.3, +0.3] 范围内，避免情感压过相关性
+        return max(-0.3, min(0.3, bonus))
+
+    @staticmethod
+    def _describe_emotion_coloring(pleasure: float, arousal: float, dominance: float) -> str:
+        """
+        生成情感染色的自然语言描述——不是指令，而是"底色"的描述。
+
+        Agent 读到这段文字时，会感受到"我现在回忆时带着这样的情绪滤镜"，
+        而不是被命令"你应该用XX语气说话"。
+
+        关键：用第一人称、描述性语言，像在说自己此刻的心境。
+        """
+        # 愉悦度描述
+        if pleasure > 0.4:
+            p_desc = "心情不错，想起的事情都带着一点暖意"
+        elif pleasure > 0.15:
+            p_desc = "心情还可以，偏积极"
+        elif pleasure > -0.15:
+            p_desc = "心情比较平静"
+        elif pleasure > -0.4:
+            p_desc = "心情有点低落，想起的事情可能偏伤感"
+        else:
+            p_desc = "心情很差，心里沉甸甸的，回忆也带着灰色"
+
+        # 唤醒度描述
+        if arousal > 0.4:
+            a_desc = "心里有点不平静，思绪比较活跃"
+        elif arousal > 0.15:
+            a_desc = "精神还可以，注意力比较集中"
+        elif arousal > -0.15:
+            a_desc = "精神状态比较平稳"
+        else:
+            a_desc = "有点提不起精神，反应可能慢一些"
+
+        # 支配度描述
+        if dominance > 0.3:
+            d_desc = "感觉比较有掌控感"
+        elif dominance > -0.2:
+            d_desc = "对事情的掌控感一般"
+        else:
+            d_desc = "感觉有点被动，不太能掌控局面"
+
+        return (
+            "## 此刻的心境\n"
+            f"（我现在是带着这样的心情在回忆：{p_desc}，{a_desc}，{d_desc}。\n"
+            "这不是任务要求，只是我此刻真实的状态。）"
+        )

@@ -1,8 +1,8 @@
 [project]
 name = "castorice-agent"
-version = "3.0.0"
-description = "自主进化的 AI Agent 框架 - 分层自我概念 + 自主循环 + 多模型原生适配，零 LangGraph 依赖"
-authors = [{ name = "Castorice Team" }]
+version = "3.3.0"
+description = "自主进化的 AI Agent 框架 - 人格数据主权 + 情感底色 + 元反射性学习 + 自主思考循环，零 LangGraph 依赖"
+authors = [{ name = "Lixiao" }]
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"

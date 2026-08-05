@@ -19,6 +19,7 @@ from castorice.memory.user_profile import UserProfile
 from castorice.memory.long_term import LongTermMemory
 from castorice.alerts import init_alerts_from_config
 from castorice.cost_budget import CostBudget, BudgetConfig
+from castorice.storage import create_personastore, Personastore
 
 
 class CastoriceEngine:
@@ -146,6 +147,29 @@ class CastoriceEngine:
         if channel_count > 0:
             self.logger.info(f"告警系统已初始化: {channel_count} 个渠道")
 
+        # P5: 去中心化人格数据主权（Personastore）
+        self.personastore: Optional[Personastore] = None
+        try:
+            raw_cfg = self.config.raw()
+            ps_raw = ((raw_cfg.get("runtime", {}) or {}).get("personastore", {})) or {}
+            if ps_raw.get("enabled", True):
+                backend = ps_raw.get("backend", "local_sqlite")
+                data_dir = ps_raw.get("data_dir", "./castorice_data")
+                max_exp = int(ps_raw.get("max_experiences", 10000))
+                self.personastore = create_personastore(
+                    backend=backend,
+                    data_dir=data_dir,
+                    max_experiences=max_exp,
+                )
+                self.logger.info(
+                    f"Personastore 已初始化: backend={backend}, data_dir={data_dir}"
+                )
+            else:
+                self.logger.info("Personastore 未启用（配置中 disabled）")
+        except Exception as e:
+            self.logger.warning(f"Personastore 初始化失败（不影响主流程）: {e}")
+            self.personastore = None
+
         self.agent = CastoriceAgent(
             model_adapter=self.model_adapter,
             tools=self.tools,
@@ -155,6 +179,51 @@ class CastoriceEngine:
             user_profile=self.user_profile,
             config=self.config,
         )
+
+        # P4: 人格画像生成器
+        try:
+            from castorice.personality_profile import PersonalityProfiler
+            self.personality_profiler = PersonalityProfiler(engine=self)
+            self.logger.info("人格画像生成器已初始化")
+        except Exception as e:
+            self.logger.warning(f"人格画像生成器初始化失败: {e}")
+            self.personality_profiler = None
+
+        # P4: 目标管理器
+        try:
+            from castorice.goal_manager import GoalManager
+            self.goal_manager = GoalManager(
+                db_path="./castorice_data/goals.db",
+                engine=self,
+            )
+            self.logger.info("目标管理器已初始化")
+        except Exception as e:
+            self.logger.warning(f"目标管理器初始化失败: {e}")
+            self.goal_manager = None
+
+        # P4: MCP 客户端
+        try:
+            from castorice.mcp_client import MCPClient, MCPServerConfig
+            self.mcp_client = MCPClient()
+            # 从配置加载 MCP 服务器
+            mcp_cfg = getattr(self.config, 'mcp_servers', None) or []
+            if isinstance(mcp_cfg, list):
+                for s in mcp_cfg:
+                    if isinstance(s, dict) and s.get("name") and s.get("command"):
+                        try:
+                            self.mcp_client.add_server(MCPServerConfig(
+                                name=s["name"],
+                                command=s["command"],
+                                args=s.get("args", []),
+                                env=s.get("env", {}),
+                                cwd=s.get("cwd"),
+                            ))
+                        except Exception as e:
+                            self.logger.warning(f"加载 MCP 服务器 {s.get('name')} 失败: {e}")
+        except Exception as e:
+            self.logger.warning(f"MCP 客户端初始化失败: {e}")
+            self.mcp_client = None
+
         self.logger.info("CastoriceEngine 初始化完成")
 
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -321,6 +390,11 @@ __plugin_info__ = {
 
     def cleanup(self) -> None:
         """清理资源"""
+        if hasattr(self, 'personastore') and self.personastore is not None:
+            try:
+                self.personastore.close()
+            except Exception:
+                pass
         if hasattr(self, 'short_term'):
             try:
                 self.short_term.close()
@@ -453,6 +527,26 @@ __plugin_info__ = {
                 self._bg_threads["consciousness"] = thread
                 self.logger.info("意识引擎已在后台启动")
                 return True
+            elif service_name == "telegram":
+                from castorice.adapters.telegram_bot import TelegramBotAdapter, TelegramBotConfig
+                tg_cfg = getattr(self.config, 'telegram', None) or {}
+                if isinstance(tg_cfg, dict) and tg_cfg.get("bot_token"):
+                    config = TelegramBotConfig(
+                        bot_token=tg_cfg["bot_token"],
+                        allowed_chat_ids=tg_cfg.get("allowed_chat_ids"),
+                        allowed_usernames=tg_cfg.get("allowed_usernames"),
+                    )
+                    service = TelegramBotAdapter(config, engine=self)
+                    self._bg_services["telegram"] = service
+                    self.telegram_bot = service
+                    thread = threading.Thread(target=service.start_in_thread, daemon=True, name="TelegramBot")
+                    thread.start()
+                    self._bg_threads["telegram"] = thread
+                    self.logger.info("Telegram Bot 已在后台启动")
+                    return True
+                else:
+                    self.logger.warning("Telegram Bot 未配置 bot_token，无法启动")
+                    return False
             else:
                 self.logger.warning(f"未知服务: {service_name}")
                 return False

@@ -64,11 +64,13 @@ class HttpServer(HTTPServerAdapter):
         self._running = True
         self._stop_event.clear()
         try:
-            thread = self.start_in_thread()
+            import threading, time
 
-            import time
-            for _ in range(20):
-                time.sleep(0.1)
+            thread = threading.Thread(target=super().run, daemon=True)
+            thread.start()
+
+            for _ in range(40):
+                time.sleep(0.25)
                 if not thread.is_alive():
                     adapter_error = self.get_error()
                     if adapter_error:

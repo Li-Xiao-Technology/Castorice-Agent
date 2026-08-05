@@ -9,10 +9,12 @@
 """
 
 import importlib.util
+import json
 import logging
 import os
 import sys
 import time
+from pathlib import Path
 from typing import Dict, List, Optional, Callable, Any
 
 logger = logging.getLogger("Castorice.Plugin")
@@ -222,3 +224,208 @@ def register_plugin_tool(name: str, description: str):
         func.__tool_description__ = description
         return func
     return decorator
+
+
+# ============================================================
+# P2-1: 插件生命周期钩子标准接口 (PluginBase)
+# ============================================================
+
+class PluginBase:
+    """
+    插件基类：提供标准生命周期钩子
+
+    插件作者继承此类，按需重写钩子方法即可。
+
+    生命周期钩子（按调用顺序）：
+    1. on_load()          —— 插件被加载时
+    2. on_start()          —— Agent 启动时
+    3. on_message()        —— 收到用户消息时（可修改消息）
+    4. on_thought()        —— Agent 产生念头时
+    5. on_action()         —— Agent 执行工具前
+    6. on_action_result()  —— Agent 工具执行后
+    7. on_response()       —— Agent 生成回复后（可修改回复）
+    8. on_stop()           —— Agent 停止时
+    9. on_unload()         —— 插件被卸载时
+
+    使用示例：
+        class MyPlugin(PluginBase):
+            def on_load(self):
+                self.logger.info("我的插件加载了")
+
+            def on_message(self, message: str, context: dict) -> str:
+                # 在用户消息前加前缀
+                return f"[我的插件] {message}"
+
+            def on_response(self, response: str, context: dict) -> str:
+                return response + "\n\n—— 由我的插件处理"
+    """
+
+    def __init__(self):
+        self.name = getattr(self, "name", self.__class__.__name__)
+        self.version = getattr(self, "version", "1.0.0")
+        self.logger = logging.getLogger(f"Castorice.Plugin.{self.name}")
+
+    # ============== 生命周期钩子 ==============
+
+    def on_load(self) -> None:
+        """插件被加载时调用（一次）"""
+        pass
+
+    def on_start(self, engine: Any = None) -> None:
+        """Agent 启动时调用"""
+        pass
+
+    def on_message(self, message: str, context: Optional[dict] = None) -> Optional[str]:
+        """
+        收到用户消息时调用
+
+        返回值：
+        - None: 不修改消息
+        - str:  修改后的消息（替换原始消息）
+        """
+        return None
+
+    def on_thought(self, thought: Any, context: Optional[dict] = None) -> None:
+        """Agent 产生念头时调用"""
+        pass
+
+    def on_action(self, action_name: str, action_params: dict, context: Optional[dict] = None) -> Optional[bool]:
+        """
+        Agent 执行工具前调用
+
+        返回值：
+        - None: 不干预
+        - True: 允许执行（默认）
+        - False: 阻止执行
+        """
+        return None
+
+    def on_action_result(
+        self, action_name: str, action_params: dict, result: Any, context: Optional[dict] = None
+    ) -> Optional[Any]:
+        """
+        Agent 工具执行后调用
+
+        返回值：
+        - None: 不修改结果
+        - Any:  修改后的结果
+        """
+        return None
+
+    def on_response(self, response: str, context: Optional[dict] = None) -> Optional[str]:
+        """
+        Agent 生成回复后调用
+
+        返回值：
+        - None: 不修改回复
+        - str:  修改后的回复
+        """
+        return None
+
+    def on_stop(self) -> None:
+        """Agent 停止时调用"""
+        pass
+
+    def on_unload(self) -> None:
+        """插件被卸载时调用"""
+        pass
+
+    # ============== 工具方法 ==============
+
+    def register_tool(self, name: str, description: str, func: Callable) -> None:
+        """插件注册工具"""
+        from castorice.tools.base_tools import register_tool
+        register_tool(name=name, description=description)(func)
+
+    def get_state(self, key: str, default: Any = None) -> Any:
+        """获取插件状态（持久化）"""
+        state_path = Path(os.environ.get("CASTORICE_DATA_DIR", "./castorice_data")) / "plugin_states" / f"{self.name}.json"
+        if state_path.exists():
+            try:
+                with open(state_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                return data.get(key, default)
+            except Exception:
+                pass
+        return default
+
+    def set_state(self, key: str, value: Any) -> None:
+        """设置插件状态（持久化）"""
+        state_dir = Path(os.environ.get("CASTORICE_DATA_DIR", "./castorice_data")) / "plugin_states"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        state_path = state_dir / f"{self.name}.json"
+        data = {}
+        if state_path.exists():
+            try:
+                with open(state_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception:
+                pass
+        data[key] = value
+        with open(state_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+# ============== 扩展 PluginManager 支持生命周期钩子 ==============
+
+def _patch_plugin_manager() -> None:
+    """
+    扩展 PluginManager：支持基于 PluginBase 的生命周期插件
+    """
+    original_load = PluginManager.load_plugin_from_file
+
+    def enhanced_load(self, file_path: str) -> bool:
+        success = original_load(self, file_path)
+        if not success:
+            return False
+
+        # 检查模块中是否有 PluginBase 子类实例
+        module_name = os.path.splitext(os.path.basename(file_path))[0]
+        module = sys.modules.get(module_name)
+        if module is None:
+            return success
+
+        for attr_name in dir(module):
+            attr = getattr(module, attr_name)
+            if (isinstance(attr, type)
+                    and issubclass(attr, PluginBase)
+                    and attr is not PluginBase):
+                try:
+                    instance = attr()
+                    instance.on_load()
+                    # 存储实例
+                    if not hasattr(self, "_plugin_instances"):
+                        self._plugin_instances = []
+                    self._plugin_instances.append(instance)
+                    logger.info(f"生命周期插件已加载: {instance.name} v{instance.version}")
+                except Exception as e:
+                    logger.error(f"生命周期插件初始化失败 {attr_name}: {e}")
+
+        return success
+
+    PluginManager.load_plugin_from_file = enhanced_load
+
+    # 添加触发钩子的方法
+    def trigger_hook(self, hook_name: str, *args, **kwargs) -> List[Any]:
+        """触发所有插件的某个钩子，返回所有非 None 的返回值"""
+        results = []
+        instances = getattr(self, "_plugin_instances", [])
+        for inst in instances:
+            try:
+                hook = getattr(inst, hook_name, None)
+                if hook and callable(hook):
+                    result = hook(*args, **kwargs)
+                    if result is not None:
+                        results.append(result)
+            except Exception as e:
+                logger.warning(f"插件钩子 {inst.name}.{hook_name} 执行失败: {e}")
+        return results
+
+    PluginManager.trigger_hook = trigger_hook
+
+
+# 应用补丁
+try:
+    _patch_plugin_manager()
+except Exception as e:
+    logger.debug(f"PluginManager 补丁应用失败: {e}")

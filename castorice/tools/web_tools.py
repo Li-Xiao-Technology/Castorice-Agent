@@ -195,7 +195,7 @@ def _web_fetch(url: str, max_length: int = 3000) -> str:
             text = text[:max_length] + f"\n... (截断,共 {len(text)} 字符)"
 
         return text if text else "(未能提取正文内容)"
-    except (httpx.HTTPError, httpx.TimeoutException) as e:
+    except (httpx.HTTPError, httpx.TimeoutException, Exception) as e:
         return f"网页抓取失败: {e}"
 
 
@@ -254,7 +254,7 @@ def _wikipedia_search(query: str, lang: str = "zh") -> str:
             extract = extract[:1500] + "..."
 
         return f"【{title}】\n{extract}\n\n来源: https://{lang}.wikipedia.org/?curid={page_id}"
-    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError) as e:
+    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError, Exception) as e:
         return f"维基百科查询失败: {e}"
 
 
@@ -318,7 +318,7 @@ def _arxiv_search(query: str, max_results: int = 5) -> str:
             )
 
         return "\n\n".join(lines)
-    except (httpx.HTTPError, httpx.TimeoutException, ET.ParseError) as e:
+    except (httpx.HTTPError, httpx.TimeoutException, ET.ParseError, Exception) as e:
         return f"arXiv 检索失败: {e}"
 
 
@@ -501,7 +501,7 @@ def _github_search(query: str, max_results: int = 5) -> str:
             )
 
         return "\n\n".join(lines)
-    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError) as e:
+    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError, Exception) as e:
         return f"GitHub 搜索失败: {e}"
 
 
@@ -605,7 +605,7 @@ def _bilibili_search(query: str, max_results: int = 5) -> str:
             )
 
         return "\n\n".join(lines)
-    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError) as e:
+    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError, Exception) as e:
         return f"Bilibili 搜索失败: {e}"
 
 
@@ -643,7 +643,7 @@ def _ip_info(target: str) -> str:
         info.append(f"时区: {data.get('timezone', '')}")
 
         return "\n".join(info)
-    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError) as e:
+    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError, Exception) as e:
         return f"IP 查询失败: {e}"
 
 
@@ -690,7 +690,7 @@ def _stock_price(symbol: str) -> str:
             info.append(f"涨跌幅: {change} ({change_percent:.2f}%)")
 
         return "\n".join(info)
-    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError) as e:
+    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError, Exception) as e:
         return f"股票查询失败: {e}"
 
 
@@ -728,7 +728,7 @@ def _translate_text(text: str, target_lang: str = "zh", source_lang: str = "auto
             return "\n".join(translations)
 
         return f"翻译失败: 无法解析响应"
-    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError) as e:
+    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError, Exception) as e:
         return f"翻译失败: {e}"
 
 
@@ -841,7 +841,7 @@ def _anime_search(query: str, type: str = "ANIME", max_results: int = 5) -> str:
             lines.append("\n".join([p for p in line_parts if p]))
 
         return "\n\n".join(lines)
-    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError) as e:
+    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError, Exception) as e:
         return f"动漫搜索失败: {e}"
 
 
@@ -932,7 +932,7 @@ def _anime_season(year: str = "", season: str = "") -> str:
         season_cn = {"WINTER": "冬季", "SPRING": "春季", "SUMMER": "夏季", "FALL": "秋季"}
         header = f"【{year}年 {season_cn.get(season.upper(), season)} 新番】\n\n"
         return header + "\n\n".join(lines)
-    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError, ValueError) as e:
+    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError, ValueError, Exception) as e:
         return f"季度动漫查询失败: {e}"
 
 
@@ -1026,7 +1026,7 @@ def _get_vrchat_client() -> Optional[Any]:
             else:
                 client.close()
                 return None
-        except (httpx.HTTPError, json.JSONDecodeError) as e:
+        except (httpx.HTTPError, json.JSONDecodeError, Exception) as e:
             logger.error(f"[VRChat] 登录异常: {e}")
             return None
 
@@ -1085,7 +1085,7 @@ def _vrchat_search(query: str, type: str = "world", max_results: int = 5) -> str
             lines.append("\n".join([p for p in line_parts if p]))
 
         return "\n\n".join(lines)
-    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError) as e:
+    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError, Exception) as e:
         return f"VRChat搜索失败: {e}"
 
 
@@ -1130,7 +1130,7 @@ def _vrchat_popular_worlds(limit: int = 10) -> str:
             )
 
         return "【VRChat 热门世界】\n\n" + "\n\n".join(lines)
-    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError) as e:
+    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError, Exception) as e:
         return f"获取热门世界失败: {e}"
 
 
@@ -1206,7 +1206,7 @@ def _vrchat_user_status(username: str) -> str:
         result = "\n".join([p for p in result_parts if p])
 
         return result
-    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError) as e:
+    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError, Exception) as e:
         return f"查询用户状态失败: {e}"
 
 
@@ -1265,7 +1265,7 @@ def _vrchat_world_info(world_id: str) -> str:
         )
 
         return result
-    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError) as e:
+    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError, Exception) as e:
         return f"获取世界信息失败: {e}"
 
 
@@ -1303,7 +1303,7 @@ def _generate_image(prompt: str, width: int = 1024, height: int = 1024, seed: in
             )
         else:
             return f"图片生成服务暂时不可用 (HTTP {resp.status_code})"
-    except (httpx.HTTPError, httpx.TimeoutException) as e:
+    except (httpx.HTTPError, httpx.TimeoutException, Exception) as e:
         return f"图片生成失败: {e}"
 
 
@@ -1389,7 +1389,7 @@ GEMINI_API_KEY=your_api_key
         else:
             return f"图片分析失败: {result.get('error', {}).get('message', '未知错误')}"
 
-    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError, ValueError) as e:
+    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError, ValueError, Exception) as e:
         return f"图片分析失败: {e}"
     except ImportError:
         return "图片分析需要 httpx 库，请安装: pip install httpx"
@@ -1440,7 +1440,7 @@ def _extract_text_from_image(image_url: str) -> str:
         else:
             return "OCR识别返回结果为空"
 
-    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError) as e:
+    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError, Exception) as e:
         return f"OCR识别失败: {e}"
 
 
@@ -1518,7 +1518,7 @@ def _pixiv_search(query: str, max_results: int = 10) -> str:
             lines.append("\n".join([p for p in line_parts if p]))
 
         return "\n\n".join(lines)
-    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError) as e:
+    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError, Exception) as e:
         return f"Pixiv 搜索失败: {e}"
 
 
@@ -1614,7 +1614,7 @@ def _pixiv_popular(mode: str = "daily", max_results: int = 10) -> str:
             lines.append("\n".join([p for p in line_parts if p]))
 
         return "\n\n".join(lines)
-    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError) as e:
+    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError, Exception) as e:
         return f"获取 Pixiv 排行榜失败: {e}"
 
 
@@ -1710,11 +1710,11 @@ def _pixiv_user_works(user_id: str, max_results: int = 10) -> str:
 
                 lines.append("\n".join([p for p in line_parts if p]))
                 lines.append("")
-            except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError) as e:
+            except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError, Exception) as e:
                 lines.append(f"作品 {work_id}: 获取详情失败 ({e})")
 
         return "\n".join(lines)
-    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError) as e:
+    except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError, Exception) as e:
         return f"获取 Pixiv 用户作品失败: {e}"
 
 

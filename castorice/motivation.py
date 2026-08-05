@@ -38,7 +38,8 @@ class IntrinsicMotivation(SqliteStorage):
     """
 
     def __init__(self, max_history: int = 100,
-                 db_path: str = "./castorice_data/motivation.db"):
+                 db_path: str = "./castorice_data/motivation.db",
+                 value_system: Optional[Any] = None):
         super().__init__(db_path)
         self._lock = threading.RLock()
         self._max_history = max_history
@@ -50,14 +51,18 @@ class IntrinsicMotivation(SqliteStorage):
         self._init_db()
         self._load_from_db()
         
-        # 第二阶段：初始化价值观系统
-        try:
-            from castorice.values import ValueSystem
-            self._value_system = ValueSystem()
-            logger.info("[动机系统] 价值观系统已集成")
-        except Exception as e:
-            logger.warning(f"价值观系统初始化失败: {e}")
-            self._value_system = None
+        # 价值观系统：优先使用外部注入（便于测试/自定义），否则默认懒加载
+        if value_system is not None:
+            self._value_system = value_system
+            logger.info("[动机系统] 价值观系统已由外部注入")
+        else:
+            try:
+                from castorice.values import ValueSystem
+                self._value_system = ValueSystem()
+                logger.info("[动机系统] 价值观系统已集成")
+            except Exception as e:
+                logger.warning(f"价值观系统初始化失败: {e}")
+                self._value_system = None
 
         # 主动行为反馈闭环参数（实例属性，避免多实例共享）
         self._proactive_adjustment: float = 1.0

@@ -46,6 +46,7 @@ class AutonomousLoop:
         self._quick_stop_event = threading.Event()
         self._deep_thread: Optional[threading.Thread] = None
         self._quick_thread: Optional[threading.Thread] = None
+        self._cfg_lock = threading.Lock()  # 保护轻量模式的配置修改
 
     def is_running(self) -> bool:
         return self._running and self._ready
@@ -74,14 +75,14 @@ class AutonomousLoop:
                 runtime_cfg = raw.get("runtime", {}) or {}
                 auto_cfg = runtime_cfg.get("autonomous", {}) or {}
             except Exception:
-                logger.debug(f"静默异常 [castorice/agent/autonomous_loop.py:76]")
+                self.logger.debug(f"静默异常 [castorice/agent/autonomous_loop.py:76]")
                 pass
             if isinstance(auto_cfg, dict):
                 self._deep_interval = int(auto_cfg.get("interval_seconds", 900))
                 self._quick_interval = int(auto_cfg.get("quick_interval_seconds", 60))
                 self._idle_threshold = int(auto_cfg.get("idle_threshold_seconds", 300))
 
-            self._session_id = self.engine.short_term.create_session()
+            self._session_id = "__autonomous_loop__"
             self.engine.user_profile.record_interaction()
 
             self._ready = True
@@ -165,7 +166,7 @@ class AutonomousLoop:
                     return False
             return True
         except Exception:
-            logger.debug(f"静默异常 [castorice/agent/autonomous_loop.py:167]")
+            self.logger.debug(f"静默异常 [castorice/agent/autonomous_loop.py:167]")
             return True
 
     def _get_context_snippet(self) -> str:
@@ -250,7 +251,71 @@ class AutonomousLoop:
 最后简单说一下你做了什么、你的感受或想法就行。"""
 
             t0 = time.time()
-            state = self.engine.agent.run(prompt, session_id=self._session_id)
+            self.logger.info(f"[自主][{mode}] 开始自由时间 | prompt_len={len(prompt)} session_id={self._session_id[:8] if self._session_id else 'None'}")
+
+            # 轻量模式：临时降低 ThinkingLoop 和工具循环的上限，避免超时
+            # 用锁保护：quick 和 deep 线程同时修改时不会产生竞态
+            _saved_max_steps = None
+            _saved_self_reflection = None
+            _saved_tool_rounds = None
+            _cfg_applied = False
+            try:
+                with self._cfg_lock:
+                    # 直接修改 ThinkingLoop 实例属性（比改 config 更干净，不影响测试）
+                    tl = getattr(self.engine.agent, 'thinking_loop', None)
+                    if tl is not None:
+                        _saved_max_steps = tl.max_steps
+                        _saved_self_reflection = tl.enable_self_reflection
+                        tl.max_steps = 2 if mode == 'quick' else 4
+                        tl.enable_self_reflection = False
+                    # 修改工具循环全局上限
+                    import castorice.agent.common as _common_mod
+                    _saved_tool_rounds = _common_mod.MAX_TOOL_ROUNDS
+                    _common_mod.MAX_TOOL_ROUNDS = 1 if mode == 'quick' else 2
+                    _cfg_applied = True
+                self.logger.info(f"[自主][{mode}] 轻量模式: max_steps={2 if mode == 'quick' else 4} tool_rounds={1 if mode == 'quick' else 2}")
+            except Exception as e:
+                self.logger.debug(f"[自主][{mode}] 设置轻量模式失败: {e}")
+
+            state = None
+            try:
+                import concurrent.futures as _cf
+                _exec = getattr(self, '_free_time_executor', None)
+                if _exec is None:
+                    _exec = _cf.ThreadPoolExecutor(max_workers=2, thread_name_prefix="AutoFreeTime")
+                    self._free_time_executor = _exec
+                self.logger.info(f"[自主][{mode}] 提交 agent.run 到线程池")
+                _fut = _exec.submit(lambda: self.engine.agent.run(prompt, session_id=self._session_id))
+                _timeout = 90 if mode == 'quick' else 150
+                self.logger.info(f"[自主][{mode}] 等待 agent.run 完成 (timeout={_timeout}s)")
+                state = _fut.result(timeout=_timeout)
+                self.logger.info(f"[自主][{mode}] agent.run 已返回")
+            except _cf.TimeoutError:
+                self.logger.warning(f"[自主][{mode}] 自由时间超时(>{_timeout}s)，跳过本次")
+            except Exception as e:
+                self.logger.error(f"[自主][{mode}] agent.run 异常: {type(e).__name__}: {e}")
+            finally:
+                # 始终恢复配置（加锁保护，避免与另一个线程的修改冲突）
+                if _cfg_applied:
+                    try:
+                        with self._cfg_lock:
+                            # 恢复 ThinkingLoop 实例属性
+                            tl = getattr(self.engine.agent, 'thinking_loop', None)
+                            if tl is not None:
+                                if _saved_max_steps is not None:
+                                    tl.max_steps = _saved_max_steps
+                                if _saved_self_reflection is not None:
+                                    tl.enable_self_reflection = _saved_self_reflection
+                            # 恢复工具循环全局上限
+                            if _saved_tool_rounds is not None:
+                                import castorice.agent.common as _common_mod_r
+                                _common_mod_r.MAX_TOOL_ROUNDS = _saved_tool_rounds
+                    except Exception:
+                        pass
+
+            if state is None:
+                return
+
             dt = time.time() - t0
 
             summary = ""

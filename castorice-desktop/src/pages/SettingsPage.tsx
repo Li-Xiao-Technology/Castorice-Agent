@@ -1,17 +1,23 @@
 import { motion, AnimatePresence } from "framer-motion";
-import { Settings as SettingsIcon, Cpu, Brain, Shield, Database, MessageSquare } from "lucide-react";
+import { Settings as SettingsIcon, Cpu, Brain, Shield, Database, MessageSquare, Wallet, Send, Plug } from "lucide-react";
 import { useState } from "react";
 import LLMConfig from "@/components/settings/LLMConfig";
 import AgentSettings from "@/components/settings/AgentSettings";
 import MemorySettings from "@/components/settings/MemorySettings";
 import SecuritySettings from "@/components/settings/SecuritySettings";
 import QQBotSettings from "@/components/settings/QQBotSettings";
+import BudgetSettings from "@/components/settings/BudgetSettings";
+import TelegramBotSettings from "@/components/settings/TelegramBotSettings";
+import MCPSettings from "@/components/settings/MCPSettings";
 
 const sections = [
   { id: "llm", label: "模型设置", icon: Cpu },
   { id: "agent", label: "Agent 性格", icon: Brain },
   { id: "memory", label: "记忆设置", icon: Database },
+  { id: "mcp", label: "MCP 工具", icon: Plug },
   { id: "qq", label: "QQ 机器人", icon: MessageSquare },
+  { id: "telegram", label: "Telegram", icon: Send },
+  { id: "budget", label: "成本闸", icon: Wallet },
   { id: "security", label: "安全保护", icon: Shield },
 ];
 
@@ -26,8 +32,14 @@ export default function SettingsPage() {
         return <AgentSettings />;
       case "memory":
         return <MemorySettings />;
+      case "mcp":
+        return <MCPSettings />;
       case "qq":
         return <QQBotSettings />;
+      case "telegram":
+        return <TelegramBotSettings />;
+      case "budget":
+        return <BudgetSettings />;
       case "security":
         return <SecuritySettings />;
       default:

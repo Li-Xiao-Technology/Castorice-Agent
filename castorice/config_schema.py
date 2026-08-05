@@ -153,26 +153,27 @@ if PYDANTIC_AVAILABLE:
 
 def validate_config_dict(config: Dict[str, Any]) -> Dict[str, Any]:
     """
-    校验配置字典
+    校验配置字典（仅校验，不替换原始字典）。
 
-    返回：标准化后的字典（pydantic 校验后）
-    异常：pydantic 校验失败时抛出 ValueError
+    - pydantic 可用时：用 CastoriceConfigSchema 做字段校验，失败抛 ValueError
+    - pydantic 不可用时：跳过校验，只确保必要默认段存在
+    - 始终返回原始 config 字典，避免 model_dump() 丢弃未声明字段
+      （真实 yaml 中的 agent/runtime/memory/security 等段在 schema 词表外）
     """
     if config is None:
         config = {}
 
     if not PYDANTIC_AVAILABLE:
-        # pydantic 不可用时直接返回，但确保默认段存在
         if "llm" not in config:
             config["llm"] = {"provider": "openai"}
         return config
 
     try:
-        schema = CastoriceConfigSchema(**config)
-        result = schema.model_dump()
-        # 确保返回的字典包含所有默认段
-        if "llm" not in result:
-            result["llm"] = {"provider": "openai"}
-        return result
+        CastoriceConfigSchema(**config)
     except Exception as e:
-        raise ValueError(f"配置校验失败: {e}")
+        raise ValueError(f"配置校验失败: {e}") from e
+
+    if "llm" not in config:
+        config["llm"] = {"provider": "openai"}
+
+    return config

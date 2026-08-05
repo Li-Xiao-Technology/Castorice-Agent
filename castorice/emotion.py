@@ -587,7 +587,9 @@ class EmotionEmergenceEngine:
                     ])
                     return response.content or ""
                 except Exception:
-                    logger.debug(f"静默异常 [emotion.py:L1070 LLM情绪反思]")
+                    import inspect
+                    _lineno = inspect.currentframe().f_lineno
+                    logger.debug(f"静默异常 [emotion.py:L{_lineno} LLM情绪反思]")
                     pass
             
             # Fallback 反思

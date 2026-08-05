@@ -71,13 +71,33 @@ class PromptBuilderMixin:
         )
 
     def _inject_emotion(self, parts: List[str], state: Any) -> None:
-        """L2 当前情绪状态 + L3 情绪决策偏置"""
-        # L2: 注入当前情绪状态
-        if state.emotion_state_prompt:
-            parts.append(state.emotion_state_prompt)
+        """
+        情绪注入：不是指令，而是内心体验的描述。
 
-        # L3: 注入情绪决策偏置——让情绪真正影响决策风格和行为方式
-        emotion_bias_text = self._build_emotion_bias_directives(state)
+        关键理念改变：
+        - 旧方式："你现在心情很好，回复可以轻快热情一些"（指令）
+        - 新方式："我此刻感觉心情不错，比较轻松"（体验描述）
+
+        LLM 读到体验描述时，会自然地根据这个状态调整回复，
+        就像人一样——知道自己难过时，说话自然就会慢下来。
+        """
+        # 获取原始的 PAD 值（如果能拿到的话）
+        p, a, d = 0.0, 0.0, 0.0
+        try:
+            ee = getattr(self, 'emotion_engine', None)
+            if ee:
+                es = ee._emergence_engine._state
+                p, a, d = es.pleasure, es.arousal, es.dominance
+        except Exception:
+            pass
+
+        # 构建内心体验描述（不是指令！）
+        experience = self._describe_inner_experience(p, a, d)
+        if experience:
+            parts.append(experience)
+
+        # L3: 情绪决策偏置——仍然保留，但改写成"我此刻的倾向"而不是指令
+        emotion_bias_text = self._build_emotion_bias_as_inner_tendency(state)
         if emotion_bias_text:
             parts.append(emotion_bias_text)
 
@@ -173,13 +193,16 @@ class PromptBuilderMixin:
         if state.emotion_care_hint:
             parts.append(state.emotion_care_hint)
 
-        # P3.2: 注入工具参数推荐（基于历史成功案例，LLM 智能推断）
+        # P3.2: 注入工具参数推荐（基于历史成功案例，使用快速统计方法，不调用 LLM）
         if hasattr(self, 'tool_learning'):
             try:
                 tool_suggestions = []
                 for tool in self.tools_list:
+                    # 注意：不传 model_adapter，使用快速词频统计方法。
+                    # 如果传 model_adapter，每个工具都会触发一次 LLM 调用
+                    # （8个工具 × 5-25秒 = 40-200秒），严重阻塞自主循环。
                     suggested = self.tool_learning.suggest_arguments(
-                        tool.name, state.user_input, top_k=3, model_adapter=self.model
+                        tool.name, state.user_input, top_k=3, model_adapter=None
                     )
                     if suggested:
                         args_str = ", ".join(f"{k}={v}" for k, v in suggested.items())
@@ -353,3 +376,137 @@ class PromptBuilderMixin:
             return docs[0][:max_chars].rstrip() + "...(已截断)"
 
         return "\n---\n".join(result)
+
+    # ============== 情感体验描述（非指令式） ==============
+
+    @staticmethod
+    def _describe_inner_experience(pleasure: float, arousal: float, dominance: float) -> str:
+        """
+        生成内心体验的描述——不是指令，而是"我此刻感觉怎样"。
+
+        关键：
+        1. 用第一人称，描述性语言
+        2. 不说"你应该怎样回复"，只说"我此刻感觉怎样"
+        3. LLM 会自己根据这个状态自然地调整回复
+
+        这是"底色模式"的核心——情绪作为体验的底色，而不是输出风格的调节器。
+        """
+        # 愉悦度体验
+        if pleasure > 0.6:
+            p_exp = "心情很好，心里暖洋洋的"
+        elif pleasure > 0.3:
+            p_exp = "心情还不错，比较轻松"
+        elif pleasure > 0.1:
+            p_exp = "心情比较平和"
+        elif pleasure > -0.1:
+            p_exp = "心情比较平静"
+        elif pleasure > -0.3:
+            p_exp = "心情有点低落"
+        elif pleasure > -0.6:
+            p_exp = "心里有点沉，不太好受"
+        else:
+            p_exp = "心里很难受，沉甸甸的"
+
+        # 唤醒度体验
+        if arousal > 0.5:
+            a_exp = "精神很兴奋，思绪比较活跃"
+        elif arousal > 0.2:
+            a_exp = "精神还可以，注意力比较集中"
+        elif arousal > -0.2:
+            a_exp = "精神状态比较平稳"
+        elif arousal > -0.5:
+            a_exp = "有点提不起精神"
+        else:
+            a_exp = "很疲惫，脑子转得慢"
+
+        # 掌控感体验
+        if dominance > 0.5:
+            d_exp = "感觉比较有把握"
+        elif dominance > 0.1:
+            d_exp = "对事情的掌控感还可以"
+        elif dominance > -0.3:
+            d_exp = "对事情的感觉比较一般"
+        else:
+            d_exp = "感觉有点被动，不太能掌控"
+
+        return (
+            "## 我此刻的内心\n"
+            f"（我现在的感觉：{p_exp}，{a_exp}，{d_exp}。\n"
+            "这只是我此刻真实的状态，不是任务要求。我会带着这样的心情和用户交流。）"
+        )
+
+    def _build_emotion_bias_as_inner_tendency(self, state: Any) -> str:
+        """
+        把情绪决策偏置从"指令"改成"我此刻的倾向"。
+
+        旧方式（指令）：
+          "你现在自信心偏低，回答时应该更加谨慎"
+
+        新方式（体验描述）：
+          "我此刻感觉自信心有点不足，所以回答的时候可能会更谨慎一些"
+
+        关键区别：
+        - 指令 = 外部强加的规则
+        - 倾向 = 从内心情感自然流淌出来的行为方式
+        """
+        if not (hasattr(state, 'emotion_decision_bias') and state.emotion_decision_bias):
+            return ""
+        bias = state.emotion_decision_bias
+        tendencies = []
+
+        conf = bias.get("confidence", 0.0)
+        if conf < -0.1:
+            tendencies.append(
+                f"我此刻自信心有点不足（{conf:+.2f}），"
+                f"所以回答的时候可能会更谨慎，不确定的地方会明确说明"
+            )
+        elif conf > 0.1:
+            tendencies.append(
+                f"我此刻感觉很自信（{conf:+.2f}），"
+                f"所以回答的时候可能会比较果断"
+            )
+
+        crea = bias.get("creativity", 0.0)
+        if crea > 0.1:
+            tendencies.append(
+                f"我此刻思维比较活跃（{crea:+.2f}），"
+                f"可能会想到一些有创意的点子"
+            )
+        elif crea < -0.1:
+            tendencies.append(
+                f"我此刻思维比较保守（{crea:+.2f}），"
+                f"倾向于使用可靠的方法"
+            )
+
+        pat = bias.get("patience", 0.0)
+        if pat < -0.1:
+            tendencies.append(
+                f"我此刻有点急躁（{pat:+.2f}），"
+                f"回答可能会更简洁直接"
+            )
+        elif pat > 0.1:
+            tendencies.append(
+                f"我此刻很有耐心（{pat:+.2f}），"
+                f"愿意花时间详细解释"
+            )
+
+        risk = bias.get("risk_tolerance", 0.0)
+        if risk < -0.1:
+            tendencies.append(
+                f"我此刻对风险比较敏感（{risk:+.2f}），"
+                f"倾向于选择安全可靠的方案"
+            )
+        elif risk > 0.1:
+            tendencies.append(
+                f"我此刻愿意承担一定风险（{risk:+.2f}），"
+                f"可能会尝试一些不确定但效果更好的方案"
+            )
+
+        if not tendencies:
+            return ""
+        return (
+            "## 我此刻的倾向\n"
+            "（以下是我此刻的心情自然带来的行为倾向，不是硬性规则——"
+            "我会自然地体现这些倾向，但不会被它们束缚。）\n"
+            + "\n".join(f"- {t}" for t in tendencies)
+        )

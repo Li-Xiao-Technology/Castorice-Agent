@@ -18,7 +18,7 @@ interface AppState {
   proactiveMessages: ProactiveMessage[];
   notifications: Notification[];
   notificationsEnabled: boolean;
-  activeView: "chat" | "consciousness" | "memory" | "tools" | "settings" | "social";
+  activeView: "chat" | "consciousness" | "memory" | "tools" | "settings" | "social" | "growth" | "monitor";
   sidebarCollapsed: boolean;
 
   setBackendStatus: (s: AppState["backendStatus"]) => void;

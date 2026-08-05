@@ -94,6 +94,7 @@ Write-Ok "Node.js ready"
 
 # ---------- 3. Start backend ----------
 Write-Step "Starting backend (port $BackendPort)..."
+$env:FREELLMAPI_API_KEY = "***REMOVED***"
 $backendArgs = @("-m", "castorice.main", "--mode", "http")
 $backendProc = Start-Process -FilePath $VenvPython -ArgumentList $backendArgs `
     -RedirectStandardError $BackendLog -NoNewWindow -PassThru -WorkingDirectory $ProjectRoot

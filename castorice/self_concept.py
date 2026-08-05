@@ -156,7 +156,9 @@ class SelfNarrativeEngine:
                             try:
                                 self.save(seed_content)
                             except Exception:
-                                logger.debug(f"静默异常 [self_concept.py:L547 写入身份种子]")
+                                import inspect
+                                _lineno = inspect.currentframe().f_lineno
+                                logger.debug(f"静默异常 [self_concept.py:L{_lineno} 写入身份种子]")
                                 pass
                             logger.info(
                                 f"身份种子已加载: {len(seed_content)} 字符 "

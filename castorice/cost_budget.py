@@ -25,19 +25,21 @@ class BudgetConfig:
     所有值设为 0 表示不限制。
     """
     # Token 预算
-    hourly_token_limit: int = 200_000     # 每小时 token 软上限（≈200K）
-    daily_token_limit: int = 2_000_000    # 每天 token 软上限（≈2M）
+    hourly_token_limit: int = 500_000     # 每小时 token 软上限（≈500K）
+    daily_token_limit: int = 5_000_000    # 每天 token 软上限（≈5M）
     # 调用频率
-    hourly_call_limit: int = 500           # 每小时调用次数软上限
+    hourly_call_limit: int = 1000          # 每小时调用次数软上限
     # 每会话步数
     per_session_thinking_steps: int = 16   # ThinkingLoop 每会话最大步数
     # AutonomousLoop 频率（秒）
-    autonomous_quick_min_interval: int = 60     # 快速循环最小间隔
-    autonomous_deep_min_interval: int = 600      # 深度循环最小间隔
+    autonomous_quick_min_interval: int = 30     # 快速循环最小间隔
+    autonomous_deep_min_interval: int = 180      # 深度循环最小间隔
     # 降频阈值（0-1，达到预算比例时开始降频）
-    throttle_threshold: float = 0.7
+    throttle_threshold: float = 0.85
     # 暂停阈值（0-1，达到预算比例时暂停自主活动）
-    pause_threshold: float = 0.95
+    pause_threshold: float = 0.98
+    # 总开关（False 时完全禁用成本闸，所有检查直接通过）
+    enabled: bool = True
 
 
 @dataclass
@@ -53,7 +55,7 @@ class CostBudget:
 
     def __init__(self, config: Optional[BudgetConfig] = None):
         self._config = config or BudgetConfig()
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
         # 滑动窗口统计
         self._hourly = _TokenWindow()
@@ -86,7 +88,18 @@ class CostBudget:
             for key, val in updates.items():
                 if hasattr(self._config, key) and val is not None:
                     try:
-                        setattr(self._config, key, type(getattr(self._config, key))(val))
+                        target_type = type(getattr(self._config, key))
+                        if target_type is bool:
+                            # 特殊处理布尔：支持 bool/字符串 "true"/"false"/"1"/"0"/数字 0/1
+                            if isinstance(val, bool):
+                                converted = val
+                            elif isinstance(val, str):
+                                converted = val.lower() in ("true", "1", "yes", "on")
+                            else:
+                                converted = bool(val)
+                        else:
+                            converted = target_type(val)
+                        setattr(self._config, key, converted)
                         applied[key] = getattr(self._config, key)
                     except (TypeError, ValueError):
                         pass
@@ -97,6 +110,7 @@ class CostBudget:
     def get_config(self) -> Dict[str, Any]:
         with self._lock:
             return {
+                "enabled": self._config.enabled,
                 "hourly_token_limit": self._config.hourly_token_limit,
                 "daily_token_limit": self._config.daily_token_limit,
                 "hourly_call_limit": self._config.hourly_call_limit,
@@ -111,6 +125,8 @@ class CostBudget:
 
     def record_usage(self, prompt_tokens: int, completion_tokens: int) -> None:
         """记录一次 LLM 调用的 token 用量"""
+        if not self._config.enabled:
+            return
         total = prompt_tokens + completion_tokens
         now = time.time()
         with self._lock:
@@ -167,6 +183,8 @@ class CostBudget:
 
     def can_take_step(self, session_id: str) -> bool:
         """检查该会话是否还允许继续 ThinkingLoop 步数"""
+        if not self._config.enabled:
+            return True
         if self._config.per_session_thinking_steps <= 0:
             return True
         with self._lock:
@@ -194,6 +212,8 @@ class CostBudget:
         检查自主循环是否可以运行。
         返回: (是否允许, 需要等待的秒数)
         """
+        if not self._config.enabled:
+            return True, 0
         if self._paused:
             return False, 300  # 暂停状态 5 分钟后再检查
 
@@ -242,6 +262,7 @@ class CostBudget:
             )
 
             return {
+                "enabled": self._config.enabled,
                 "throttled": self._throttled,
                 "paused": self._paused,
                 "hourly": {
@@ -258,5 +279,15 @@ class CostBudget:
                     "used_pct": round(day_used_pct, 1),
                     "ttl_seconds": round(day_ttl),
                 },
-                "config": self.get_config(),
+                "config": {
+                    "enabled": self._config.enabled,
+                    "hourly_token_limit": self._config.hourly_token_limit,
+                    "daily_token_limit": self._config.daily_token_limit,
+                    "hourly_call_limit": self._config.hourly_call_limit,
+                    "per_session_thinking_steps": self._config.per_session_thinking_steps,
+                    "autonomous_quick_min_interval": self._config.autonomous_quick_min_interval,
+                    "autonomous_deep_min_interval": self._config.autonomous_deep_min_interval,
+                    "throttle_threshold": self._config.throttle_threshold,
+                    "pause_threshold": self._config.pause_threshold,
+                },
             }

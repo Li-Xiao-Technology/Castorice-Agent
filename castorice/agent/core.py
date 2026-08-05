@@ -217,6 +217,21 @@ class CastoriceAgent(PromptBuilderMixin, ToolLoopMixin, MemoryOpsMixin,
         # ============================================================
         self._init_evolution_system(model_adapter, runtime_cfg)
 
+        # ============================================================
+        # P3: 持续学习与知识蒸馏（Continuous Learning）
+        # 知识卡片抽取 + 睡眠机制 + 定时调度
+        # ============================================================
+        try:
+            from castorice.continuous_learning import ContinuousLearningManager
+            self.continuous_learning = ContinuousLearningManager(
+                engine=self,
+                experience_journal=self.experience_journal,
+                llm_adapter=model_adapter,
+            )
+        except Exception as e:
+            logger.debug(f"持续学习管理器初始化失败: {e}")
+            self.continuous_learning = None
+
         # P0: 长期意图追踪系统（需要在 unified_memory 之前初始化）
         self.intent_tracker = IntentTracker()
 
@@ -623,8 +638,24 @@ class CastoriceAgent(PromptBuilderMixin, ToolLoopMixin, MemoryOpsMixin,
     async def _phase_memory_recall(self, state: State, session_id: str) -> None:
         """P2.2: 统一记忆检索 + L4 主动关心 + 短期记忆加载"""
         try:
+            # 收集当前情绪状态，用于情感感知的记忆检索（情绪一致性记忆效应）
+            emotion_state = None
+            try:
+                ee_state = self.emotion_engine._emergence_engine._state
+                emotion_state = {
+                    "pleasure": float(ee_state.pleasure),
+                    "arousal": float(ee_state.arousal),
+                    "dominance": float(ee_state.dominance),
+                }
+            except Exception:
+                pass
+
             unified_result = await asyncio.to_thread(
-                self.unified_memory.recall, state.user_input, session_id=session_id, top_k_per_source=3
+                self.unified_memory.recall,
+                state.user_input,
+                session_id=session_id,
+                top_k_per_source=3,
+                emotion_state=emotion_state,
             )
             state.relevant_history = unified_result.get("summary", "")
             

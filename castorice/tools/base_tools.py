@@ -40,16 +40,33 @@ _MAX_READ_LINES = 10000
 
 
 def _default_allowed_paths() -> List[str]:
-    """默认允许的路径列表：工作目录 + castorice_data + ~/.castorice"""
+    """默认允许的路径列表：工作目录 + castorice_data + journals + ~/.castorice"""
     import os as _os
     paths = []
     cwd = _os.getcwd()
     paths.append(cwd)
     castorice_data = _os.path.join(cwd, "castorice_data")
     paths.append(castorice_data)
+    journals_dir = _os.path.join(cwd, "journals")
+    paths.append(journals_dir)
     dot_castorice = _os.path.join(_os.path.expanduser("~"), ".castorice")
     paths.append(dot_castorice)
     return paths
+
+
+def _redirect_note_path(file_path: str) -> str:
+    """将简单文件名的笔记(.txt/.md)重定向到 journals/ 目录。
+    仅当路径是纯文件名（不含目录分隔符）且为笔记类扩展名时才重定向。
+    """
+    if not file_path:
+        return file_path
+    # 已经是绝对路径或包含子目录 → 不重定向
+    if os.path.isabs(file_path) or "/" in file_path or "\\" in file_path:
+        return file_path
+    lower = file_path.lower()
+    if lower.endswith(".txt") or lower.endswith(".md"):
+        return os.path.join("journals", file_path)
+    return file_path
 
 
 def _is_path_safe(file_path: str, allowed_paths: Optional[List[str]]) -> bool:
@@ -581,6 +598,7 @@ def _get_weather(city: str, day: int = 0, lang: str = "zh") -> str:
 
 def _read_file(file_path: str, max_lines: int = 200, allowed_paths: Optional[List[str]] = None) -> str:
     try:
+        file_path = _redirect_note_path(file_path)
         if max_lines > _MAX_READ_LINES:
             return f"[BLOCKED] max_lines 超过上限 {_MAX_READ_LINES}"
         if not _is_path_safe(file_path, allowed_paths):
@@ -618,6 +636,7 @@ def _read_file(file_path: str, max_lines: int = 200, allowed_paths: Optional[Lis
 )
 def _write_file(file_path: str, content: str, allowed_paths: Optional[List[str]] = None) -> str:
     try:
+        file_path = _redirect_note_path(file_path)
         if len(content) > _MAX_WRITE_CONTENT_LENGTH:
             return f"[BLOCKED] 内容长度超过上限 {_MAX_WRITE_CONTENT_LENGTH} 字节"
         if not _is_path_safe(file_path, allowed_paths):

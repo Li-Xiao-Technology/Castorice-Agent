@@ -171,12 +171,6 @@ class EventBus:
             except ValueError:
                 pass
 
-
-def set_event_bus(instance: EventBus) -> None:
-    """手动设置全局 EventBus 实例（Agent 初始化时调用，确保配置生效）"""
-    global _global_event_bus
-    with _global_bus_lock:
-        _global_event_bus = instance
     def get_stats(self) -> Dict[str, Any]:
         """获取事件总线统计信息"""
         with self._lock:
@@ -188,6 +182,13 @@ def set_event_bus(instance: EventBus) -> None:
                 "async_subscribers_total": sum(async_type_counts.values()) + len(self._all_async_subscribers),
                 "event_types": list(type_counts.keys()) + list(async_type_counts.keys()),
             }
+
+
+def set_event_bus(instance: EventBus) -> None:
+    """手动设置全局 EventBus 实例（Agent 初始化时调用，确保配置生效）"""
+    global _global_event_bus
+    with _global_bus_lock:
+        _global_event_bus = instance
 
 
 # ========== 全局单例 ==========

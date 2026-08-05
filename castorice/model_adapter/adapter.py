@@ -50,6 +50,15 @@ class ModelAdapter:
         self.gemini_cfg = llm_config.get("gemini", {})
         self.qwen_cfg = llm_config.get("qwen", {})
         self.freellmapi_cfg = llm_config.get("freellmapi", {})
+        # 诊断：打印 LLM 配置状态（不打印 key）
+        _llm_logger = logging.getLogger("Castorice.ModelAdapter")
+        _freellm_key = self.freellmapi_cfg.get("api_key", "")
+        _llm_logger.info(
+            f"LLM provider={self.provider} timeout={self.timeout}s retries={self.max_retries} "
+            f"freellmapi: base_url={self.freellmapi_cfg.get('base_url','?')} "
+            f"model={self.freellmapi_cfg.get('model','?')} "
+            f"api_key={'SET(' + str(len(_freellm_key)) + 'chars)' if _freellm_key else 'EMPTY'}"
+        )
 
         self._openai_clients: Dict[str, Any] = {}
         self._anthropic_client = None
@@ -95,6 +104,21 @@ class ModelAdapter:
             "gemini": GeminiProvider(self),
             "qwen": QwenProvider(self),
         }
+        # 自定义供应商配置（从 config 加载）
+        self._custom_providers: Dict[str, Dict[str, Any]] = {}
+
+        # P0-1/P0-2: 熔断器 + 降级管理器
+        self._circuit_breaker = None
+        self._degradation = None
+        try:
+            from castorice.health.circuit_breaker import CircuitBreaker
+            self._circuit_breaker = CircuitBreaker(
+                name=f"llm_{self.provider}",
+                failure_threshold=5,
+                recovery_timeout=30.0,
+            )
+        except Exception as e:
+            logger.debug(f"熔断器初始化失败: {e}")
 
     def update_config(self, updates):
         """Runtime update of generation params (takes effect immediately)
@@ -121,6 +145,117 @@ class ModelAdapter:
                 f"Runtime config update: {applied}"
             )
         return applied
+
+    # ========== 自定义供应商管理 ==========
+
+    def register_custom_provider(
+        self,
+        provider_id: str,
+        name: str,
+        base_url: str,
+        api_key: str = "",
+        model: str = "",
+    ) -> None:
+        """注册自定义 OpenAI 兼容供应商"""
+        provider_id = provider_id.strip().lower().replace(" ", "_")
+        if not provider_id:
+            raise ValueError("provider_id 不能为空")
+        if provider_id in self._providers and provider_id not in self._custom_providers:
+            raise ValueError(f"供应商 '{provider_id}' 是内置供应商，不可覆盖")
+
+        self._custom_providers[provider_id] = {
+            "id": provider_id,
+            "name": name or provider_id,
+            "base_url": base_url.rstrip("/"),
+            "api_key": api_key,
+            "model": model,
+            "is_custom": True,
+        }
+        # 用 OpenAIProvider 作为统一实现（所有自定义供应商都走 OpenAI 兼容协议）
+        self._providers[provider_id] = OpenAIProvider(self)
+        logger.info(f"已注册自定义供应商: {provider_id} ({name})")
+
+    def unregister_custom_provider(self, provider_id: str) -> bool:
+        """注销自定义供应商"""
+        if provider_id not in self._custom_providers:
+            return False
+        del self._custom_providers[provider_id]
+        if provider_id in self._providers:
+            del self._providers[provider_id]
+        # 如果当前正在使用被删除的供应商，切回 openai
+        if self.provider == provider_id:
+            self.provider = "openai"
+        logger.info(f"已注销自定义供应商: {provider_id}")
+        return True
+
+    def update_custom_provider(
+        self,
+        provider_id: str,
+        name: Optional[str] = None,
+        base_url: Optional[str] = None,
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
+    ) -> bool:
+        """更新自定义供应商配置"""
+        if provider_id not in self._custom_providers:
+            return False
+        cfg = self._custom_providers[provider_id]
+        if name is not None:
+            cfg["name"] = name
+        if base_url is not None:
+            cfg["base_url"] = base_url.rstrip("/")
+        if api_key is not None:
+            cfg["api_key"] = api_key
+        if model is not None:
+            cfg["model"] = model
+        logger.info(f"已更新自定义供应商: {provider_id}")
+        return True
+
+    def list_providers(self) -> List[Dict[str, Any]]:
+        """列出所有可用供应商（内置 + 自定义）"""
+        builtin_meta = {
+            "openai": {"name": "OpenAI", "models": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"]},
+            "anthropic": {"name": "Anthropic Claude", "models": ["claude-3-5-sonnet-20241022", "claude-3-opus", "claude-3-haiku"]},
+            "ollama": {"name": "Ollama", "models": ["llama3.1:8b", "qwen2.5:7b", "gemma2:9b"]},
+            "openrouter": {"name": "OpenRouter", "models": ["anthropic/claude-3.5-sonnet", "openai/gpt-4o", "google/gemini-1.5-pro", "meta-llama/llama-3.1-405b", "mistralai/mistral-large"]},
+            "gemini": {"name": "Google Gemini", "models": ["gemini-1.5-flash", "gemini-1.5-pro"]},
+            "qwen": {"name": "通义千问", "models": ["qwen-plus", "qwen-max", "qwen-turbo"]},
+            "freellmapi": {"name": "FreeLLMAPI", "models": ["default"]},
+        }
+        result = []
+        # 内置供应商
+        for pid, meta in builtin_meta.items():
+            has_key = self._check_provider_has_key(pid)
+            result.append({
+                "id": pid,
+                "name": meta["name"],
+                "models": meta["models"],
+                "has_key": has_key,
+                "is_custom": False,
+            })
+        # 自定义供应商
+        for pid, cfg in self._custom_providers.items():
+            result.append({
+                "id": pid,
+                "name": cfg["name"],
+                "models": [cfg["model"]] if cfg.get("model") else [],
+                "has_key": bool(cfg.get("api_key")),
+                "is_custom": True,
+                "base_url": cfg["base_url"],
+                "model": cfg.get("model", ""),
+            })
+        return result
+
+    def _check_provider_has_key(self, provider_id: str) -> bool:
+        """检查内置供应商是否配置了 API Key"""
+        try:
+            # 属性名格式: {provider_id}_cfg (无前缀下划线), 例如 freellmapi_cfg
+            llm_cfg = getattr(self, f"{provider_id}_cfg", None)
+            if llm_cfg and isinstance(llm_cfg, dict):
+                return bool(llm_cfg.get("api_key"))
+        except Exception:
+            pass
+        return False
 
     def _get_openai_client(self, base_url: str, api_key: str):
         if self._OpenAI is None:
@@ -185,6 +320,13 @@ class ModelAdapter:
 
     def _is_retryable_error(self, error: Exception) -> bool:
         error_str = str(error).lower()
+        # 认证错误绝不重试（再试多少次也没用）
+        if "401" in error_str or "unauthorized" in error_str or "invalid api key" in error_str or "missing credentials" in error_str:
+            return False
+        # 4xx 客户端错误一般不重试
+        match_4xx = re.search(r'\b(4\d{2})\b', str(error))
+        if match_4xx and match_4xx.group(1) != "429":
+            return False
         if any(keyword in error_str for keyword in ["timeout", "connection", "network", "timed out"]):
             return True
         if "429" in error_str or "rate limit" in error_str or "rate_limit" in error_str:
@@ -243,15 +385,43 @@ class ModelAdapter:
         return LLMError(str(error), details={"provider": self.provider, "original_type": type(error).__name__})
 
     def _call_with_retry_stats(self, call_fn) -> ChatResponse:
+        # P0-1: 熔断器检查（OPEN 状态直接快速失败）
+        if self._circuit_breaker and not self._circuit_breaker.is_available():
+            stats = self._circuit_breaker.get_stats()
+            raise LLMConnectionError(
+                f"熔断器 [{stats['name']}] 处于 OPEN 状态，"
+                f"已熔断 {stats['open_count']} 次，"
+                f"{stats['thresholds']['recovery_timeout']}s 后恢复",
+                details={"provider": self.provider, "circuit_breaker": stats},
+            )
+
         last_error = None
+        _t_total = time.time()
         for attempt in range(self.max_retries + 1):
+            _t0 = time.time()
             try:
+                logger.info(f"[LLM] 尝试 {attempt+1}/{self.max_retries+1} | provider={self.provider} timeout={self.timeout}s")
                 response = call_fn()
+                _dt = time.time() - _t0
+                logger.info(f"[LLM] 尝试 {attempt+1} 成功 | 耗时={_dt:.1f}s | model={getattr(response, 'model', '?')}")
                 with self._stats_lock:
                     if response.usage:
                         self.total_prompt_tokens += response.usage.get("prompt_tokens", 0)
                         self.total_completion_tokens += response.usage.get("completion_tokens", 0)
                     self.total_calls += 1
+                # P0-2: 上报成功给熔断器和降级管理器
+                if self._circuit_breaker:
+                    try:
+                        with self._circuit_breaker:
+                            pass  # 空上下文用于记录成功
+                    except Exception:
+                        pass
+                try:
+                    deg = getattr(self, "_degradation", None) or getattr(self, "degradation_manager", None)
+                    if deg:
+                        deg.report_llm_result(True)
+                except Exception:
+                    pass
                 # P1-4: 成本闸记录 token 用量
                 try:
                     cb = getattr(self, "cost_budget", None)
@@ -260,8 +430,8 @@ class ModelAdapter:
                             response.usage.get("prompt_tokens", 0),
                             response.usage.get("completion_tokens", 0),
                         )
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"[LLM] cost_budget 异常: {e}")
                 try:
                     from castorice.metrics import get_metrics
                     metrics = get_metrics()
@@ -271,9 +441,13 @@ class ModelAdapter:
                         metrics.add_tokens("llm_completion_tokens", response.usage.get("completion_tokens", 0), provider=self.provider)
                 except ImportError:
                     pass
+                except Exception as e:
+                    logger.warning(f"[LLM] metrics 异常: {e}")
                 return response
             except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError) as e:
                 last_error = e
+                _dt = time.time() - _t0
+                logger.warning(f"[LLM] 尝试 {attempt+1} 失败 | 耗时={_dt:.1f}s | {type(e).__name__}: {str(e)[:120]}")
                 try:
                     from castorice.metrics import get_metrics
                     metrics = get_metrics()
@@ -281,6 +455,21 @@ class ModelAdapter:
                     metrics.inc_error("llm_errors", provider=self.provider)
                 except ImportError:
                     pass
+                # P0-2: 上报失败（仅在最后一次尝试或不可重试时）
+                is_last_attempt = attempt >= self.max_retries or not self._is_retryable_error(e)
+                if is_last_attempt:
+                    if self._circuit_breaker:
+                        try:
+                            with self._circuit_breaker:
+                                raise e  # 触发熔断器记录失败
+                        except type(e):
+                            pass
+                    try:
+                        deg = getattr(self, "_degradation", None) or getattr(self, "degradation_manager", None)
+                        if deg:
+                            deg.report_llm_result(False)
+                    except Exception:
+                        pass
                 if attempt < self.max_retries and self._is_retryable_error(e):
                     delay = self.retry_delay * (2 ** attempt)
                     logger.warning(f"LLM 调用第{attempt + 1}次失败，{delay}s 后重试: {e}")
@@ -289,7 +478,8 @@ class ModelAdapter:
                 raise self._wrap_llm_error(e)
             except Exception as e:
                 last_error = e
-                logger.exception("LLM 调用发生未预期异常")
+                _dt = time.time() - _t0
+                logger.exception(f"[LLM] 尝试 {attempt+1} 未预期异常 | 耗时={_dt:.1f}s | {type(e).__name__}")
                 try:
                     from castorice.metrics import get_metrics
                     metrics = get_metrics()

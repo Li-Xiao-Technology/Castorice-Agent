@@ -10,6 +10,8 @@ import {
   PanelLeftClose,
   PanelLeft,
   Users,
+  Activity,
+  Sprout,
 } from "lucide-react";
 import Sidebar from "../sidebar/SessionList";
 import ServiceStatus from "../sidebar/ServiceStatus";
@@ -21,7 +23,9 @@ const navItems = [
   { id: "consciousness", label: "意识流", icon: Brain, path: "/consciousness" },
   { id: "social", label: "社交", icon: Users, path: "/social" },
   { id: "memory", label: "记忆", icon: Database, path: "/memory" },
+  { id: "growth", label: "自我成长", icon: Sprout, path: "/growth" },
   { id: "tools", label: "工具", icon: Wrench, path: "/tools" },
+  { id: "monitor", label: "系统监控", icon: Activity, path: "/monitor" },
   { id: "settings", label: "设置", icon: Settings, path: "/settings" },
 ];
 

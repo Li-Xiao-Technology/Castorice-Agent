@@ -680,6 +680,20 @@ class ThinkingStrategySelector:
         injection = parsed.get("thinking_prompt", "")
         if not injection:
             injection = self._default_prompt(name)
+
+        # P1-3: 如果是 LLM 自创的新策略（不在参考列表中），
+        # 调用 create_custom_strategy 持久化，让"自创策略"真正落地
+        if name not in self.REFERENCE_STRATEGIES and name not in self._custom_strategies:
+            try:
+                self.create_custom_strategy(
+                    name=name,
+                    description=parsed.get("description", f"LLM 自创策略: {name}"),
+                    thinking_prompt=injection,
+                    behavior_params=parsed.get("behavior_params"),
+                )
+            except Exception as e:
+                logger.debug(f"保存自创策略 '{name}' 失败（不影响使用）: {e}")
+
         return name, injection
 
     def _default_prompt(self, key: str) -> str:

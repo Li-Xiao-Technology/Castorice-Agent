@@ -12,6 +12,14 @@ class OpenAIProvider:
 
     def _get_cfg(self):
         provider = self.adapter.provider
+        # 自定义供应商优先（优先级最高，覆盖所有内置
+        if provider in getattr(self.adapter, '_custom_providers', {}):
+            cfg = self.adapter._custom_providers[provider]
+            return {
+                "api_key": cfg.get("api_key", ""),
+                "base_url": cfg.get("base_url", ""),
+                "model": cfg.get("model", ""),
+            }
         if provider == "ollama":
             return {
                 "api_key": "ollama",

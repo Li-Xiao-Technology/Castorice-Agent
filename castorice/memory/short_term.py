@@ -51,8 +51,9 @@ class ShortTermMemory(SqliteStorage, ShortTermMemoryInterface):
         self._init_db()
         try:
             self.cleanup_old_sessions()
+            self.cleanup_empty_sessions()
         except Exception as e:
-            logger.warning(f"P1-21: 启动清理老会话失败: {e}")
+            logger.warning(f"P1-21: 启动清理会话失败: {e}")
 
     def cleanup_old_sessions(self, days: Optional[int] = None) -> int:
         """
@@ -88,6 +89,31 @@ class ShortTermMemory(SqliteStorage, ShortTermMemoryInterface):
             logger.error(f"清理老会话失败: {e}")
             return 0
 
+    def cleanup_empty_sessions(self) -> int:
+        """
+        清理没有任何消息的空会话。
+
+        :return: 删除的会话数
+        """
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                """DELETE FROM sessions
+                   WHERE session_id NOT IN (
+                       SELECT DISTINCT session_id FROM messages
+                   ) AND session_id NOT LIKE '\_\_%' ESCAPE '\\'"""
+            )
+            deleted = cursor.rowcount
+            conn.commit()
+            if deleted > 0:
+                logger.info(f"清理了 {deleted} 个空会话")
+            return deleted
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"清理空会话失败: {e}")
+            return 0
+
     def _init_db(self) -> None:
         """初始化 SQLite 表结构"""
         conn = self._get_conn()
@@ -118,6 +144,28 @@ class ShortTermMemory(SqliteStorage, ShortTermMemoryInterface):
             CREATE INDEX IF NOT EXISTS idx_messages_session
             ON messages(session_id, timestamp)
         """)
+        # FTS5 全文搜索索引（跨会话搜索消息）
+        try:
+            cursor.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+                    content,
+                    role UNINDEXED,
+                    session_id UNINDEXED,
+                    message_id UNINDEXED,
+                    timestamp UNINDEXED,
+                    tokenize='unicode61'
+                )
+            """)
+            # 初次同步已有数据（如果是首次建表）
+            cursor.execute("SELECT COUNT(*) FROM messages_fts")
+            if cursor.fetchone()[0] == 0:
+                cursor.execute("""
+                    INSERT OR IGNORE INTO messages_fts (rowid, content, role, session_id, message_id, timestamp)
+                    SELECT m.id, m.content, m.role, m.session_id, m.id, m.timestamp
+                    FROM messages m
+                """)
+        except Exception as e:
+            logger.warning(f"FTS5 索引创建失败（可能 SQLite 不支持 FTS5）: {e}")
         conn.commit()
 
     def create_session(self, session_id: Optional[str] = None) -> str:
@@ -153,6 +201,15 @@ class ShortTermMemory(SqliteStorage, ShortTermMemoryInterface):
                 json.dumps(message.metadata) if message.metadata else None,
             ),
         )
+        msg_id = cursor.lastrowid
+        # 同步写入 FTS5 索引
+        try:
+            cursor.execute(
+                "INSERT OR IGNORE INTO messages_fts (rowid, content, role, session_id, message_id, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+                (msg_id, message.content, message.role, session_id, msg_id, message.timestamp),
+            )
+        except Exception:
+            pass  # FTS 失败不影响主流程
         cursor.execute(
             "UPDATE sessions SET updated_at = ? WHERE session_id = ?",
             (now, session_id),
@@ -220,20 +277,40 @@ class ShortTermMemory(SqliteStorage, ShortTermMemoryInterface):
             return {"session_id": row[0], "created_at": row[1], "updated_at": row[2], "archived": bool(row[3]), "summary": row[4]}
         return None
 
-    def list_sessions(self, archived: Optional[bool] = None, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+    def list_sessions(self, archived: Optional[bool] = None, limit: Optional[int] = None,
+                      include_internal: bool = False, include_empty: bool = True) -> List[Dict[str, Any]]:
         conn = self._get_conn()
         cursor = conn.cursor()
-        if archived is None:
-            query = "SELECT session_id, created_at, updated_at, archived, summary FROM sessions ORDER BY updated_at DESC"
-            params = ()
-        else:
-            query = "SELECT session_id, created_at, updated_at, archived, summary FROM sessions WHERE archived = ? ORDER BY updated_at DESC"
-            params = (1 if archived else 0,)
-        
+
+        conditions = []
+        params: tuple = ()
+
+        if archived is not None:
+            conditions.append("s.archived = ?")
+            params = params + (1 if archived else 0,)
+
+        if not include_internal:
+            # 过滤掉内部会话（以 __ 开头的 session_id）
+            conditions.append("s.session_id NOT LIKE '\_\_%' ESCAPE '\\'")
+
+        query = """
+            SELECT DISTINCT s.session_id, s.created_at, s.updated_at, s.archived, s.summary
+            FROM sessions s
+        """
+
+        if not include_empty:
+            # 只返回至少有一条消息的会话
+            query += " INNER JOIN messages m ON m.session_id = s.session_id"
+
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+
+        query += " ORDER BY s.updated_at DESC"
+
         if limit is not None:
             query += " LIMIT ?"
             params = params + (limit,)
-        
+
         cursor.execute(query, params)
         rows = cursor.fetchall()
         return [
@@ -320,3 +397,72 @@ class ShortTermMemory(SqliteStorage, ShortTermMemoryInterface):
                 topics.append(content)
 
         return f"对话主题: {'; '.join(topics)}"
+
+    def search_messages(
+        self,
+        query: str,
+        session_id: Optional[str] = None,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """
+        FTS5 全文搜索消息。
+
+        :param query: 搜索关键词（支持 FTS5 语法："foo OR bar"、"foo*"）
+        :param session_id: 可选，限定某个会话
+        :param limit: 返回结果数上限
+        :return: 匹配的消息列表，按相关度排序
+        """
+        if not query or not query.strip():
+            return []
+        conn = self._get_conn()
+        try:
+            if session_id:
+                cursor = conn.execute(
+                    """SELECT f.session_id, f.role, f.content, f.timestamp, rank
+                       FROM messages_fts f
+                       WHERE messages_fts MATCH ? AND f.session_id = ?
+                       ORDER BY rank LIMIT ?""",
+                    (query.strip(), session_id, limit),
+                )
+            else:
+                cursor = conn.execute(
+                    """SELECT f.session_id, f.role, f.content, f.timestamp, rank
+                       FROM messages_fts f
+                       WHERE messages_fts MATCH ?
+                       ORDER BY rank LIMIT ?""",
+                    (query.strip(), limit),
+                )
+            rows = cursor.fetchall()
+            results = []
+            for r in rows:
+                results.append({
+                    "session_id": r[0],
+                    "role": r[1],
+                    "content": r[2],
+                    "timestamp": r[3],
+                    "rank": float(r[4]) if r[4] is not None else 0.0,
+                })
+            return results
+        except Exception as e:
+            logger.warning(f"FTS5 搜索失败，回退到 LIKE: {e}")
+            # 回退方案：LIKE 模糊搜索
+            like_query = f"%{query.strip()}%"
+            if session_id:
+                cursor = conn.execute(
+                    """SELECT session_id, role, content, timestamp
+                       FROM messages WHERE content LIKE ? AND session_id = ?
+                       ORDER BY timestamp DESC LIMIT ?""",
+                    (like_query, session_id, limit),
+                )
+            else:
+                cursor = conn.execute(
+                    """SELECT session_id, role, content, timestamp
+                       FROM messages WHERE content LIKE ?
+                       ORDER BY timestamp DESC LIMIT ?""",
+                    (like_query, limit),
+                )
+            rows = cursor.fetchall()
+            return [
+                {"session_id": r[0], "role": r[1], "content": r[2], "timestamp": r[3], "rank": 0.0}
+                for r in rows
+            ]

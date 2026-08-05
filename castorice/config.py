@@ -69,164 +69,19 @@ def validate_config(config_dict: Dict[str, Any]) -> Dict[str, Any]:
     使用 pydantic 校验配置字典（关键字段）。
     若 pydantic 未安装则跳过校验，直接返回原配置。
     校验失败抛出 ValueError，包含具体错误信息。
+
+    统一委托给 config_schema.validate_config_dict 作为单一校验源。
     """
     try:
-        from pydantic import BaseModel, Field, field_validator, model_validator
+        from castorice.config_schema import validate_config_dict
+        return validate_config_dict(config_dict)
     except ImportError:
-        return config_dict
+        try:
+            from pydantic import BaseModel, Field, field_validator, model_validator
+        except ImportError:
+            return config_dict
 
-    class LLMConfig(BaseModel):
-        provider: str = "openai"
-
-        @field_validator("provider")
-        @classmethod
-        def validate_provider(cls, v: str) -> str:
-            if v.lower() not in _SUPPORTED_LLM_PROVIDERS:
-                raise ValueError(
-                    f"不支持的 LLM 供应商: {v}，支持列表: {sorted(_SUPPORTED_LLM_PROVIDERS)}"
-                )
-            return v.lower()
-
-    class LongTermMemoryConfig(BaseModel):
-        backend: Optional[str] = None
-
-        @field_validator("backend")
-        @classmethod
-        def validate_backend(cls, v: Optional[str]) -> Optional[str]:
-            if v is not None and v.lower() not in _SUPPORTED_MEMORY_BACKENDS:
-                raise ValueError(
-                    f"不支持的长期记忆后端: {v}，支持列表: {sorted(_SUPPORTED_MEMORY_BACKENDS)}"
-                )
-            return v.lower() if v else v
-
-    class MemoryConfig(BaseModel):
-        backend: Optional[str] = None
-        long_term: Optional[LongTermMemoryConfig] = None
-
-        @field_validator("backend")
-        @classmethod
-        def validate_backend(cls, v: Optional[str]) -> Optional[str]:
-            if v is not None and v.lower() not in _SUPPORTED_MEMORY_BACKENDS:
-                raise ValueError(
-                    f"不支持的记忆后端: {v}，支持列表: {sorted(_SUPPORTED_MEMORY_BACKENDS)}"
-                )
-            return v.lower() if v else v
-
-    class AgentConfig(BaseModel):
-        max_iterations: Optional[int] = None
-
-    class SelfEvolvingConfig(BaseModel):
-        enabled: Optional[bool] = None
-        reflection_interval_turns: Optional[int] = None
-        reflection_llm_threshold: Optional[float] = None
-        max_experiences: Optional[int] = None
-
-        @field_validator("reflection_interval_turns")
-        @classmethod
-        def validate_interval(cls, v):
-            if v is not None and v < 1:
-                raise ValueError(f"reflection_interval_turns 必须 >= 1，实际为 {v}")
-            return v
-
-        @field_validator("reflection_llm_threshold")
-        @classmethod
-        def validate_threshold(cls, v):
-            if v is not None and not (0.0 <= v <= 1.0):
-                raise ValueError(f"reflection_llm_threshold 应在 [0, 1]，实际为 {v}")
-            return v
-
-        @field_validator("max_experiences")
-        @classmethod
-        def validate_max_exp(cls, v):
-            if v is not None and v < 100:
-                raise ValueError(f"max_experiences 必须 >= 100，实际为 {v}")
-            return v
-
-    class RuntimeConfig(BaseModel):
-        max_iterations: Optional[int] = None
-        self_evolving: Optional[SelfEvolvingConfig] = None
-
-    # QQ 机器人 intent 预设值白名单（字符串形式）
-    _SUPPORTED_QQ_BOT_INTENTS = {"basic", "with_c2c", "all"}
-
-    class QQBotConfig(BaseModel):
-        intent: Optional[Any] = None  # 可以是字符串或整数
-
-        @field_validator("intent")
-        @classmethod
-        def validate_intent(cls, v):
-            # 仅当 intent 为字符串时校验预设值；整数（位运算结果）直接放行
-            if isinstance(v, str):
-                if v.lower() not in _SUPPORTED_QQ_BOT_INTENTS:
-                    raise ValueError(
-                        f"不支持的 QQ 机器人 intent 预设值: {v}，"
-                        f"支持列表: {sorted(_SUPPORTED_QQ_BOT_INTENTS)}"
-                    )
-                return v.lower()
-            return v
-
-    class ToolsConfig(BaseModel):
-        # 工具配置是动态的，不做严格字段校验
-        @model_validator(mode="before")
-        @classmethod
-        def validate_tools(cls, values):
-            # 每个工具的配置项也应该是 dict（或 None）
-            if isinstance(values, dict):
-                for name, cfg in values.items():
-                    if cfg is not None and not isinstance(cfg, dict):
-                        raise ValueError(
-                            f"工具 '{name}' 的配置应该是 dict，"
-                            f"实际为 {type(cfg).__name__}"
-                        )
-            return values
-
-    class WorkflowsConfig(BaseModel):
-        # 工作流配置是动态的，不做严格字段校验
-        @model_validator(mode="before")
-        @classmethod
-        def validate_workflows(cls, values):
-            # 每个工作流应该有 steps 字段且为 list
-            if isinstance(values, dict):
-                for name, cfg in values.items():
-                    if not isinstance(cfg, dict):
-                        raise ValueError(
-                            f"工作流 '{name}' 的配置应该是 dict，"
-                            f"实际为 {type(cfg).__name__}"
-                        )
-                    steps = cfg.get("steps")
-                    if steps is None:
-                        raise ValueError(
-                            f"工作流 '{name}' 缺少必需的 'steps' 字段"
-                        )
-                    if not isinstance(steps, list):
-                        raise ValueError(
-                            f"工作流 '{name}' 的 'steps' 字段应该是 list，"
-                            f"实际为 {type(steps).__name__}"
-                        )
-            return values
-
-    class LoggingConfig(BaseModel):
-        level: Optional[str] = "INFO"
-        format: Optional[str] = "text"
-        log_dir: Optional[str] = "./logs"
-        max_size_mb: Optional[int] = 10
-        backup_count: Optional[int] = 5
-
-    class ConfigSchema(BaseModel):
-        llm: Optional[LLMConfig] = None
-        memory: Optional[MemoryConfig] = None
-        agent: Optional[AgentConfig] = None
-        runtime: Optional[RuntimeConfig] = None
-        qq_bot: Optional[QQBotConfig] = None
-        tools: Optional[ToolsConfig] = None
-        workflows: Optional[WorkflowsConfig] = None
-        logging: Optional[LoggingConfig] = None
-
-    try:
-        ConfigSchema(**config_dict)
-    except Exception as e:
-        raise ValueError(f"配置校验失败: {e}") from e
-
+    # pydantic 可用但 config_schema 不可达时的兜底（极罕见）
     return config_dict
 
 

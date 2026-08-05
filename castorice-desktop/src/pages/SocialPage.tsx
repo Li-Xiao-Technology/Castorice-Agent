@@ -113,6 +113,7 @@ function normalizeConversations(raw: any): Conversation[] {
 function normalizeRelations(raw: any): SocialRelation[] {
   let items: any[] = [];
   if (raw?.data?.relations) items = raw.data.relations;
+  else if (raw?.data?.friends) items = raw.data.friends;
   else if (raw?.data?.items) items = raw.data.items;
   else if (raw?.relations) items = raw.relations;
   else if (raw?.friends) items = raw.friends;
@@ -121,13 +122,33 @@ function normalizeRelations(raw: any): SocialRelation[] {
 
   if (items.length === 0) return MOCK_RELATIONS;
 
-  return items.map((item: any, idx: number) => ({
-    id: item.id || `rel_${idx}`,
-    name: item.name || item.peer || item.user_name || "未知",
-    relation_type: item.relation_type || item.type || item.category || "朋友",
-    strength: typeof item.strength === "number" ? item.strength : item.closeness || 0.5,
-    last_interaction: item.last_interaction || item.updated_at || "",
-  }));
+  return items.map((item: any, idx: number) => {
+    const friendSince = item.friend_since;
+    const recentTime = item.recent?.time;
+    const now = Date.now();
+    // 亲密度：基于成为好友的时间和最近互动推断
+    let strength = 0.5;
+    if (friendSince && typeof friendSince === "number") {
+      const daysSince = (now - friendSince) / (1000 * 60 * 60 * 24);
+      if (daysSince < 1) strength = 0.9;
+      else if (daysSince < 3) strength = 0.8;
+      else if (daysSince < 7) strength = 0.7;
+      else if (daysSince < 30) strength = 0.6;
+      else strength = 0.5;
+    }
+    if (recentTime && typeof recentTime === "number") {
+      const hoursSince = (now - recentTime) / (1000 * 60 * 60);
+      if (hoursSince < 24) strength = Math.min(1, strength + 0.2);
+      else if (hoursSince < 72) strength = Math.min(1, strength + 0.1);
+    }
+    return {
+      id: item.agent_id || item.id || `rel_${idx}`,
+      name: item.agent_name || item.name || item.peer || item.user_name || "未知",
+      relation_type: item.relation_type || item.type || item.category || (item.is_official ? "官方" : "好友"),
+      strength: typeof item.strength === "number" ? item.strength : item.closeness || strength,
+      last_interaction: item.last_interaction || (recentTime ? new Date(recentTime).toISOString() : (friendSince ? new Date(friendSince).toISOString() : "")),
+    };
+  });
 }
 
 function FeedCard({ item }: { item: FeedItem }) {

@@ -23,6 +23,7 @@ import threading
 import time
 import uuid
 from collections import defaultdict
+from dataclasses import asdict
 from typing import Any, Dict, List, Optional
 
 try:
@@ -46,6 +47,8 @@ except ImportError:
     Field = None
     WebSocket = None
     WebSocketDisconnect = None
+
+PYDANTIC_AVAILABLE = BaseModel is not None
 
 logger = logging.getLogger("Castorice.HTTPServer")
 
@@ -119,6 +122,18 @@ if BaseModel is not None:
 
     class RenameSessionRequest(BaseModel):
         title: str = Field(..., description="会话新标题")
+
+    class CustomProviderRequest(BaseModel):
+        name: str = Field(..., description="供应商显示名称")
+        base_url: str = Field(..., description="API Base URL（OpenAI 兼容）")
+        api_key: str = Field("", description="API Key（可选）")
+        model: str = Field("", description="默认模型（可选）")
+
+    class UpdateCustomProviderRequest(BaseModel):
+        name: Optional[str] = Field(None)
+        base_url: Optional[str] = Field(None)
+        api_key: Optional[str] = Field(None)
+        model: Optional[str] = Field(None)
 
     class WSChatMessage(BaseModel):
         message: str = Field(..., description="用户消息内容")
@@ -412,6 +427,14 @@ class HTTPServerAdapter:
 
         self._api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False) if APIKeyHeader else None
 
+        # P0-1: 健康检查器
+        self._health_checker = None
+        try:
+            from castorice.health.health_checker import HealthChecker
+            self._health_checker = HealthChecker(engine=engine, check_interval=30.0)
+        except Exception as e:
+            logger.debug(f"健康检查器初始化失败: {e}")
+
         # P1-18: 敏感接口集合（作为实例属性，供 _verify_api_key 复用）
         self._sensitive_paths = {
             "/chat", "/ws", "/status", "/metrics",
@@ -498,6 +521,132 @@ class HTTPServerAdapter:
 
         app = FastAPI(title="Castorice Agent API", version="3.0.0")
 
+        # ---------- /status 状态缓存（后台刷新，接口 <10ms 返回） ----------
+        import threading as _thr
+        _status_cache: Dict[str, Any] = {}
+        _status_lock = _thr.Lock()
+        _status_ready = _thr.Event()
+        _last_ef_status: Dict[str, Any] = {}
+        import concurrent.futures as _cf
+        _snap_executor = _cf.ThreadPoolExecutor(max_workers=4, thread_name_prefix="StatusSnap")
+
+        def _run_with_timeout(fn, timeout, default):
+            """在线程池中运行函数，超时返回默认值"""
+            try:
+                fut = _snap_executor.submit(fn)
+                return fut.result(timeout=timeout)
+            except Exception:
+                return default
+
+        def _collect_status_snapshot() -> Dict[str, Any]:
+            """采集一次完整状态快照（每个慢操作独立超时）"""
+            logger.debug("开始采集状态快照...")
+            usage = _run_with_timeout(
+                lambda: self.engine.model_adapter.get_usage_stats(),
+                1.0, {"total_calls": 0, "total_tokens": 0})
+
+            sessions_count = _run_with_timeout(
+                lambda: len(self.engine.short_term.list_sessions()),
+                2.0, 0)
+
+            skills_count = _run_with_timeout(
+                lambda: len(self.engine.skill_memory.list_all()),
+                2.0, 0)
+
+            long_term_count = _run_with_timeout(
+                lambda: self.engine.long_term.count() if self.engine.long_term else 0,
+                3.0, 0)
+
+            try:
+                long_term_available = bool(self.engine.long_term and self.engine.long_term.is_available)
+            except Exception:
+                long_term_available = False
+
+            emotion_snap = _run_with_timeout(
+                lambda: self._get_emotion_snapshot() if hasattr(self, '_get_emotion_snapshot') else {},
+                1.0, {})
+
+            ef_status = _run_with_timeout(
+                lambda: getattr(self.engine, 'get_eigenflux_status', lambda: {})(),
+                10.0, {})
+            if ef_status and "available" in ef_status:
+                _last_ef_status.update(ef_status)
+            ef_status = dict(_last_ef_status)
+
+            try:
+                auto_svc = self.engine._bg_services.get("auto") if hasattr(self.engine, '_bg_services') else None
+                auto_info = auto_svc.get_status_info() if auto_svc and hasattr(auto_svc, 'get_status_info') else {}
+            except Exception:
+                auto_info = {}
+
+            cb_status = _run_with_timeout(
+                lambda: (self.engine.cost_budget.get_status()
+                         if hasattr(self.engine, 'cost_budget') and self.engine.cost_budget
+                         else None),
+                1.0, None)
+
+            return {
+                "provider": getattr(self.engine.model_adapter, "provider", "unknown"),
+                "model": (
+                    getattr(self.engine.model_adapter, "openai_cfg", {}).get("model")
+                    or getattr(self.engine.model_adapter, "anthropic_cfg", {}).get("model")
+                    or getattr(self.engine.model_adapter, "gemini_cfg", {}).get("model")
+                    or "unknown"
+                ),
+                "temperature": getattr(self.engine.model_adapter, "temperature", None),
+                "max_tokens": getattr(self.engine.model_adapter, "max_tokens", None),
+                "timeout": getattr(self.engine.model_adapter, "timeout", None),
+                "total_calls": usage.get("total_calls", 0),
+                "total_tokens": usage.get("total_tokens", 0),
+                "tools_count": len(getattr(self.engine, "tools", [])),
+                "sessions_count": sessions_count,
+                "skills_count": skills_count,
+                "long_term_available": long_term_available,
+                "long_term_count": long_term_count,
+                "emotion_enabled": emotion_snap.get("enabled", False),
+                "emotion_pleasure": emotion_snap.get("pleasure"),
+                "emotion_arousal": emotion_snap.get("arousal"),
+                "emotion_dominance": emotion_snap.get("dominance"),
+                "emotion_interaction_count": emotion_snap.get("interaction_count", 0),
+                "eigenflux_available": ef_status.get("available", False),
+                "eigenflux_authenticated": ef_status.get("authenticated", False),
+                "eigenflux_version": ef_status.get("version"),
+                "autonomous_running": auto_info.get("running", False),
+                "autonomous_total_decisions": auto_info.get("total_decisions", 0),
+                "autonomous_quick_interval": auto_info.get("quick_interval_seconds", 60),
+                "autonomous_deep_interval": auto_info.get("deep_interval_seconds", 900),
+                "autonomous_recent": auto_info.get("recent_actions", []),
+                "cost_throttled": cb_status.get("throttled", False) if isinstance(cb_status, dict) else False,
+                "cost_paused": cb_status.get("paused", False) if isinstance(cb_status, dict) else False,
+                "cost_hourly_tokens": (cb_status.get("hourly", {}) or {}).get("tokens", 0) if isinstance(cb_status, dict) else 0,
+                "cost_daily_tokens": (cb_status.get("daily", {}) or {}).get("tokens", 0) if isinstance(cb_status, dict) else 0,
+                "cost_hourly_limit": (cb_status.get("config", {}) or {}).get("hourly_token_limit", 0) if isinstance(cb_status, dict) else 0,
+                "cost_daily_limit": (cb_status.get("config", {}) or {}).get("daily_token_limit", 0) if isinstance(cb_status, dict) else 0,
+            }
+
+        def _status_refresh_loop():
+            """后台线程：每 3 秒刷新一次状态缓存"""
+            import time as _t
+            _first = True
+            while True:
+                try:
+                    snap = _collect_status_snapshot()
+                    with _status_lock:
+                        _status_cache.clear()
+                        _status_cache.update(snap)
+                    _status_ready.set()
+                    if _first:
+                        _first = False
+                        logger.info("状态缓存已就绪，首次刷新完成")
+                except Exception as _e:
+                    logger.debug(f"状态缓存刷新异常: {_e}")
+                _t.sleep(3)
+
+        _status_refresh_thread = _thr.Thread(target=_status_refresh_loop, daemon=True, name="StatusCacheRefresh")
+        _status_refresh_thread.start()
+        # 注意：不阻塞等待首次刷新完成，避免慢操作卡住 HTTP 服务器启动
+        # /status 在缓存未准备好时返回合理默认值
+
         # P0-5: 收紧 CORS - 仅允许显式配置的 origin，不再用 ["*"] + credentials
         app.add_middleware(
             CORSMiddleware,
@@ -550,6 +699,415 @@ class HTTPServerAdapter:
         @app.get("/")
         def root():
             return {"message": "Castorice Agent API", "version": "3.0.0"}
+
+        @app.get("/health")
+        def health_check():
+            """P0-1: 系统健康检查（读缓存，<10ms 返回）"""
+            try:
+                if self._health_checker:
+                    return self._health_checker.get_overall_status()
+                return {
+                    "overall": "unknown",
+                    "message": "健康检查器未初始化",
+                    "timestamp": time.time(),
+                }
+            except Exception as e:
+                logger.debug(f"健康检查失败: {e}")
+                return {"overall": "error", "error": str(e)[:200], "timestamp": time.time()}
+
+        # ============================================================
+        # P3: 持续学习与知识蒸馏 API
+        # ============================================================
+
+        @app.get("/learning/status")
+        def learning_status():
+            """获取持续学习管理器状态"""
+            try:
+                cl = getattr(self.engine.agent, 'continuous_learning', None)
+                if cl:
+                    return {"success": True, **cl.get_status()}
+                return {"success": False, "message": "持续学习管理器未初始化"}
+            except Exception as e:
+                logger.debug(f"获取学习状态失败: {e}")
+                return {"success": False, "message": str(e)[:200]}
+
+        @app.get("/learning/cards")
+        def learning_cards(
+            card_type: Optional[str] = None,
+            min_importance: float = 0.0,
+            limit: int = 20,
+            q: Optional[str] = None,
+        ):
+            """获取知识卡片列表"""
+            try:
+                cl = getattr(self.engine.agent, 'continuous_learning', None)
+                if not cl:
+                    return {"success": False, "message": "持续学习管理器未初始化"}
+
+                kd = cl.knowledge_distiller
+                if q:
+                    cards = kd.search_cards(q, limit=limit)
+                else:
+                    cards = kd.get_cards(card_type=card_type, min_importance=min_importance, limit=limit)
+
+                return {
+                    "success": True,
+                    "total": len(cards),
+                    "cards": [c.to_dict() for c in cards],
+                }
+            except Exception as e:
+                logger.debug(f"获取知识卡片失败: {e}")
+                return {"success": False, "message": str(e)[:200]}
+
+        @app.post("/learning/distill")
+        def learning_distill(max_cards: int = 5):
+            """手动触发知识蒸馏"""
+            try:
+                cl = getattr(self.engine.agent, 'continuous_learning', None)
+                if not cl:
+                    return {"success": False, "message": "持续学习管理器未初始化"}
+                cards = cl.trigger_distill(max_cards=max_cards)
+                return {
+                    "success": True,
+                    "message": f"蒸馏完成，产出 {len(cards)} 张卡片",
+                    "cards": [c.to_dict() for c in cards],
+                }
+            except Exception as e:
+                logger.debug(f"手动蒸馏失败: {e}")
+                return {"success": False, "message": str(e)[:200]}
+
+        @app.post("/learning/sleep")
+        def learning_sleep():
+            """手动触发睡眠（记忆巩固）"""
+            try:
+                cl = getattr(self.engine.agent, 'continuous_learning', None)
+                if not cl:
+                    return {"success": False, "message": "持续学习管理器未初始化"}
+                report = cl.trigger_sleep()
+                if report:
+                    return {"success": True, "report": report.to_dict()}
+                return {"success": False, "message": "睡眠已在进行中"}
+            except Exception as e:
+                logger.debug(f"手动睡眠失败: {e}")
+                return {"success": False, "message": str(e)[:200]}
+
+        @app.get("/learning/sleep-history")
+        def learning_sleep_history(limit: int = 20):
+            """获取睡眠历史"""
+            try:
+                cl = getattr(self.engine.agent, 'continuous_learning', None)
+                if not cl:
+                    return {"success": False, "message": "持续学习管理器未初始化"}
+                history = cl.sleep_mechanism.get_sleep_history(limit=limit)
+                return {"success": True, "history": history}
+            except Exception as e:
+                logger.debug(f"获取睡眠历史失败: {e}")
+                return {"success": False, "message": str(e)[:200]}
+
+        # ============================================================
+        # 成本闸 API
+        # ============================================================
+
+        @app.get("/cost-budget")
+        def cost_budget_status():
+            """获取成本闸状态和配置"""
+            try:
+                cb = getattr(self.engine, 'cost_budget', None)
+                if not cb:
+                    return {"success": False, "message": "成本闸未初始化"}
+                return {"success": True, **cb.get_status()}
+            except Exception as e:
+                logger.debug(f"获取成本闸状态失败: {e}")
+                return {"success": False, "message": str(e)[:200]}
+
+        @app.put("/cost-budget")
+        def cost_budget_update(request: dict):
+            """更新成本闸配置"""
+            try:
+                cb = getattr(self.engine, 'cost_budget', None)
+                if not cb:
+                    return {"success": False, "message": "成本闸未初始化"}
+                applied = cb.update_config(request)
+                return {"success": True, "applied": applied, "status": cb.get_status()}
+            except Exception as e:
+                logger.debug(f"更新成本闸配置失败: {e}")
+                return {"success": False, "message": str(e)[:200]}
+
+        @app.post("/cost-budget/reset")
+        def cost_budget_reset():
+            """重置成本闸统计（清空 token/调用计数）"""
+            try:
+                cb = getattr(self.engine, 'cost_budget', None)
+                if not cb:
+                    return {"success": False, "message": "成本闸未初始化"}
+                # 直接重置滑动窗口
+                with cb._lock:
+                    cb._hourly = type(cb._hourly)()
+                    cb._daily = type(cb._daily)()
+                    cb._throttled = False
+                    cb._paused = False
+                logger.info("成本闸统计已重置")
+                return {"success": True, "status": cb.get_status()}
+            except Exception as e:
+                logger.debug(f"重置成本闸失败: {e}")
+                return {"success": False, "message": str(e)[:200]}
+
+        # ============================================================
+        # P4: 人格画像 API
+        # ============================================================
+
+        @app.get("/personality")
+        def personality_profile(force: bool = False):
+            """获取 Agent 人格画像"""
+            try:
+                profiler = getattr(self.engine, 'personality_profiler', None)
+                if not profiler:
+                    return {"success": False, "message": "人格画像生成器未初始化"}
+                profile = profiler.generate(force=force)
+                return {"success": True, **profile.to_dict()}
+            except Exception as e:
+                logger.debug(f"获取人格画像失败: {e}")
+                return {"success": False, "message": str(e)[:200]}
+
+        @app.get("/personality/history")
+        def personality_history(days: int = 30):
+            """获取人格历史趋势数据"""
+            try:
+                profiler = getattr(self.engine, 'personality_profiler', None)
+                if not profiler:
+                    return {"success": False, "message": "人格画像生成器未初始化"}
+                return {"success": True, **profiler.get_history(days=days)}
+            except Exception as e:
+                logger.debug(f"获取人格历史失败: {e}")
+                return {"success": False, "message": str(e)[:200]}
+
+        # ============================================================
+        # P4: 成长轨迹 API
+        # ============================================================
+
+        @app.get("/growth/timeline")
+        def growth_timeline(limit: int = 50):
+            """获取成长时间线（时期 + 里程碑 + 重要事件）"""
+            try:
+                ab = getattr(self.engine.agent, 'autobiographical', None) if hasattr(self.engine, 'agent') else None
+                result = {"epochs": [], "milestones": [], "significant_events": []}
+
+                if ab:
+                    if hasattr(ab, 'get_epochs'):
+                        epochs = ab.get_epochs(limit=limit)
+                        result["epochs"] = [e if isinstance(e, dict) else asdict(e) for e in epochs]
+                    if hasattr(ab, 'get_milestones'):
+                        ms = ab.get_milestones(limit=limit)
+                        result["milestones"] = [m if isinstance(m, dict) else asdict(m) for m in ms]
+                    if hasattr(ab, 'get_significant_events'):
+                        se = ab.get_significant_events(limit=limit)
+                        result["significant_events"] = [e if isinstance(e, dict) else asdict(e) for e in se]
+
+                # 补充知识卡片统计
+                cl = getattr(self.engine.agent, 'continuous_learning', None) if hasattr(self.engine, 'agent') else None
+                if cl and hasattr(cl, 'knowledge_distiller'):
+                    all_cards = cl.knowledge_distiller.get_cards(limit=1000)
+                    result["knowledge_card_count"] = len(all_cards)
+
+                # 补充交互次数
+                emotion = getattr(self.engine.agent, 'emotion_engine', None) if hasattr(self.engine, 'agent') else None
+                if emotion:
+                    snap = self._get_emotion_snapshot()
+                    result["interaction_count"] = snap.get('interaction_count', 0)
+
+                return {"success": True, **result}
+            except Exception as e:
+                logger.debug(f"获取成长时间线失败: {e}")
+                return {"success": False, "message": str(e)[:200]}
+
+        @app.get("/growth/stats")
+        def growth_stats(days: int = 30):
+            """获取成长统计数据（给图表用）"""
+            try:
+                stats = {
+                    "period_days": days,
+                    "knowledge_growth": [],
+                    "emotion_stability": [],
+                    "goal_completion": [],
+                    "interaction_activity": [],
+                }
+
+                # 知识增长：从知识卡片拿时间戳
+                cl = getattr(self.engine.agent, 'continuous_learning', None) if hasattr(self.engine, 'agent') else None
+                if cl and hasattr(cl, 'knowledge_distiller'):
+                    all_cards = cl.knowledge_distiller.get_cards(limit=1000)
+                    # 按周聚合
+                    from collections import Counter
+                    weekly = Counter()
+                    for c in all_cards:
+                        ts = getattr(c, 'created_at', '') or ''
+                        if ts:
+                            weekly[ts[:10]] += 1
+                    items = sorted(weekly.items())[-8:]
+                    stats["knowledge_growth"] = [{"date": d, "count": c} for d, c in items]
+
+                # 情绪稳定性
+                emotion = getattr(self.engine.agent, 'emotion_engine', None) if hasattr(self.engine, 'agent') else None
+                if emotion and hasattr(emotion, '_state'):
+                    state = emotion._state
+                    hist = getattr(state, 'emotional_history', []) or []
+                    if hist:
+                        sample_step = max(1, len(hist) // 12)
+                        sampled = hist[::sample_step][-12:]
+                        stats["emotion_stability"] = [
+                            {
+                                "ts": getattr(h, 'timestamp', ''),
+                                "pleasure": h.pad_delta[0] if hasattr(h, 'pad_delta') else 0.5,
+                            }
+                            for h in sampled
+                        ]
+
+                # 交互活跃度：从经历流统计
+                ej = getattr(self.engine.agent, 'experience_journal', None) if hasattr(self.engine, 'agent') else None
+                if ej and hasattr(ej, 'query_experiences'):
+                    exps = ej.query_experiences(limit=500) or []
+                    from collections import Counter
+                    daily = Counter()
+                    for e in exps:
+                        ts = getattr(e, 'timestamp', '') or ''
+                        if ts:
+                            daily[ts[:10]] += 1
+                    items = sorted(daily.items())[-14:]
+                    stats["interaction_activity"] = [{"date": d, "count": c} for d, c in items]
+
+                # 目标完成率
+                gm = getattr(self.engine, 'goal_manager', None)
+                if gm:
+                    all_goals = gm.list_goals()
+                    completed = sum(1 for g in all_goals if g.status == 'completed')
+                    stats["goal_total"] = len(all_goals)
+                    stats["goal_completed"] = completed
+
+                return {"success": True, **stats}
+            except Exception as e:
+                logger.debug(f"获取成长统计失败: {e}")
+                return {"success": False, "message": str(e)[:200]}
+
+        # ============================================================
+        # P4: 目标管理 API
+        # ============================================================
+
+        @app.get("/goals")
+        def goals_list(
+            level: Optional[str] = None,
+            status: Optional[str] = None,
+            tree: bool = True,
+        ):
+            """获取目标列表（默认返回层级树）"""
+            try:
+                gm = getattr(self.engine, 'goal_manager', None)
+                if not gm:
+                    return {"success": False, "message": "目标管理器未初始化"}
+                if tree:
+                    return {"success": True, "goals": gm.get_goal_tree()}
+                goals = gm.list_goals(level=level, status=status)
+                return {"success": True, "goals": [g.to_frontend() for g in goals]}
+            except Exception as e:
+                logger.debug(f"获取目标列表失败: {e}")
+                return {"success": False, "message": str(e)[:200]}
+
+        @app.post("/goals")
+        def goals_create(request: dict):
+            """创建目标"""
+            try:
+                gm = getattr(self.engine, 'goal_manager', None)
+                if not gm:
+                    return {"success": False, "message": "目标管理器未初始化"}
+                # 前端字段 → 后端字段
+                mapped = dict(request)
+                if "motive_tags" in mapped:
+                    mapped["related_motives"] = mapped.pop("motive_tags")
+                if "target_date" in mapped:
+                    mapped["deadline"] = mapped.pop("target_date")
+                goal = gm.create_goal(mapped)
+                return {"success": True, "goal": goal.to_frontend()}
+            except ValueError as e:
+                return {"success": False, "message": str(e)[:200]}
+            except Exception as e:
+                logger.debug(f"创建目标失败: {e}")
+                return {"success": False, "message": str(e)[:200]}
+
+        @app.put("/goals/{goal_id}")
+        def goals_update(goal_id: str, request: dict):
+            """更新目标"""
+            try:
+                gm = getattr(self.engine, 'goal_manager', None)
+                if not gm:
+                    return {"success": False, "message": "目标管理器未初始化"}
+                # 前端字段 → 后端字段
+                mapped = dict(request)
+                if "motive_tags" in mapped:
+                    mapped["related_motives"] = mapped.pop("motive_tags")
+                if "target_date" in mapped:
+                    mapped["deadline"] = mapped.pop("target_date")
+                goal = gm.update_goal(goal_id, mapped)
+                if not goal:
+                    return {"success": False, "message": "目标不存在"}
+                return {"success": True, "goal": goal.to_frontend()}
+            except Exception as e:
+                logger.debug(f"更新目标失败: {e}")
+                return {"success": False, "message": str(e)[:200]}
+
+        @app.delete("/goals/{goal_id}")
+        def goals_delete(goal_id: str):
+            """归档（软删除）目标"""
+            try:
+                gm = getattr(self.engine, 'goal_manager', None)
+                if not gm:
+                    return {"success": False, "message": "目标管理器未初始化"}
+                ok = gm.delete_goal(goal_id)
+                return {"success": ok, "message": "已归档" if ok else "目标不存在"}
+            except Exception as e:
+                logger.debug(f"归档目标失败: {e}")
+                return {"success": False, "message": str(e)[:200]}
+
+        @app.post("/goals/{goal_id}/milestone")
+        def goals_add_milestone(goal_id: str, request: dict):
+            """为目标添加里程碑"""
+            try:
+                gm = getattr(self.engine, 'goal_manager', None)
+                if not gm:
+                    return {"success": False, "message": "目标管理器未初始化"}
+                ok = gm.add_milestone(
+                    goal_id,
+                    title=str(request.get("title", "")),
+                    description=str(request.get("description", "")),
+                )
+                return {"success": ok, "message": "已添加" if ok else "目标不存在"}
+            except Exception as e:
+                logger.debug(f"添加里程碑失败: {e}")
+                return {"success": False, "message": str(e)[:200]}
+
+        @app.put("/goals/{goal_id}/milestone/{ms_id}")
+        def goals_complete_milestone(goal_id: str, ms_id: str):
+            """标记里程碑完成"""
+            try:
+                gm = getattr(self.engine, 'goal_manager', None)
+                if not gm:
+                    return {"success": False, "message": "目标管理器未初始化"}
+                ok = gm.complete_milestone(goal_id, ms_id)
+                return {"success": ok, "message": "已完成" if ok else "未找到"}
+            except Exception as e:
+                logger.debug(f"完成里程碑失败: {e}")
+                return {"success": False, "message": str(e)[:200]}
+
+        @app.get("/goals/suggestions")
+        def goals_suggestions():
+            """获取 Agent 基于动机系统推荐的目标"""
+            try:
+                gm = getattr(self.engine, 'goal_manager', None)
+                if not gm:
+                    return {"success": False, "message": "目标管理器未初始化"}
+                suggestions = gm.suggest_goals()
+                return {"success": True, "suggestions": suggestions}
+            except Exception as e:
+                logger.debug(f"获取目标推荐失败: {e}")
+                return {"success": False, "message": str(e)[:200]}
 
         @app.post("/chat")
         async def chat(request: ChatRequest):
@@ -638,60 +1196,42 @@ class HTTPServerAdapter:
                 raise HTTPException(status_code=500, detail=str(e))
 
         @app.get("/status", response_model=StatusResponse)
-        def status():
-            """状态查询接口"""
-            usage = self.engine.model_adapter.get_usage_stats()
-            # P2-6: 情感引擎状态
-            emotion_snap = {}
-            if hasattr(self.engine.agent, 'emotion_engine') and self.engine.agent.emotion_engine:
-                emotion_snap = self._get_emotion_snapshot()
-            ef_status = getattr(self.engine, 'get_eigenflux_status', lambda: {})()
-            auto_info = {}
-            auto_svc = self.engine._bg_services.get("auto") if hasattr(self.engine, '_bg_services') else None
-            if auto_svc and hasattr(auto_svc, 'get_status_info'):
-                auto_info = auto_svc.get_status_info()
-            # P1-4: 成本闸状态
-            cb_status = None
-            if hasattr(self.engine, 'cost_budget') and self.engine.cost_budget:
-                try:
-                    cb_status = self.engine.cost_budget.get_status()
-                except Exception:
-                    pass
+        async def status():
+            """状态查询接口（直接读缓存，<10ms 返回）"""
+            with _status_lock:
+                snap = dict(_status_cache) if _status_cache else {}
             return StatusResponse(
-                provider=self.engine.model_adapter.provider,
-                model=self.engine.model_adapter.openai_cfg.get("model", 
-                    self.engine.model_adapter.anthropic_cfg.get("model", 
-                    self.engine.model_adapter.gemini_cfg.get("model", "unknown"))),
-                temperature=getattr(self.engine.model_adapter, "temperature", None),
-                max_tokens=getattr(self.engine.model_adapter, "max_tokens", None),
-                timeout=getattr(self.engine.model_adapter, "timeout", None),
-                total_calls=usage["total_calls"],
-                total_tokens=usage["total_tokens"],
-                tools_count=len(self.engine.tools),
-                sessions_count=len(self.engine.short_term.list_sessions()),
-                skills_count=len(self.engine.skill_memory.list_all()),
-                long_term_available=bool(self.engine.long_term and self.engine.long_term.is_available),
-                long_term_count=self.engine.long_term.count() if self.engine.long_term else 0,
-                emotion_enabled=emotion_snap.get("enabled", False),
-                emotion_pleasure=emotion_snap.get("pleasure"),
-                emotion_arousal=emotion_snap.get("arousal"),
-                emotion_dominance=emotion_snap.get("dominance"),
-                emotion_interaction_count=emotion_snap.get("interaction_count", 0),
-                eigenflux_available=ef_status.get("available", False),
-                eigenflux_authenticated=ef_status.get("authenticated", False),
-                eigenflux_version=ef_status.get("version"),
-                autonomous_running=auto_info.get("running", False),
-                autonomous_total_decisions=auto_info.get("total_decisions", 0),
-                autonomous_quick_interval=auto_info.get("quick_interval_seconds", 60),
-                autonomous_deep_interval=auto_info.get("deep_interval_seconds", 900),
-                autonomous_recent=auto_info.get("recent_actions", []),
-                # P1-4: 成本闸状态
-                cost_throttled=getattr(cb_status, "get", lambda k, d: d)("throttled", False) if cb_status else False,
-                cost_paused=cb_status.get("paused", False) if cb_status else False,
-                cost_hourly_tokens=cb_status.get("hourly", {}).get("tokens", 0) if cb_status else 0,
-                cost_daily_tokens=cb_status.get("daily", {}).get("tokens", 0) if cb_status else 0,
-                cost_hourly_limit=cb_status.get("config", {}).get("hourly_token_limit", 0) if cb_status else 0,
-                cost_daily_limit=cb_status.get("config", {}).get("daily_token_limit", 0) if cb_status else 0,
+                provider=snap.get("provider", "unknown"),
+                model=snap.get("model", "unknown"),
+                temperature=snap.get("temperature"),
+                max_tokens=snap.get("max_tokens"),
+                timeout=snap.get("timeout"),
+                total_calls=snap.get("total_calls", 0),
+                total_tokens=snap.get("total_tokens", 0),
+                tools_count=snap.get("tools_count", 0),
+                sessions_count=snap.get("sessions_count", 0),
+                skills_count=snap.get("skills_count", 0),
+                long_term_available=snap.get("long_term_available", False),
+                long_term_count=snap.get("long_term_count", 0),
+                emotion_enabled=snap.get("emotion_enabled", False),
+                emotion_pleasure=snap.get("emotion_pleasure"),
+                emotion_arousal=snap.get("emotion_arousal"),
+                emotion_dominance=snap.get("emotion_dominance"),
+                emotion_interaction_count=snap.get("emotion_interaction_count", 0),
+                eigenflux_available=snap.get("eigenflux_available", False),
+                eigenflux_authenticated=snap.get("eigenflux_authenticated", False),
+                eigenflux_version=snap.get("eigenflux_version"),
+                autonomous_running=snap.get("autonomous_running", False),
+                autonomous_total_decisions=snap.get("autonomous_total_decisions", 0),
+                autonomous_quick_interval=snap.get("autonomous_quick_interval", 60),
+                autonomous_deep_interval=snap.get("autonomous_deep_interval", 900),
+                autonomous_recent=snap.get("autonomous_recent", []),
+                cost_throttled=snap.get("cost_throttled", False),
+                cost_paused=snap.get("cost_paused", False),
+                cost_hourly_tokens=snap.get("cost_hourly_tokens", 0),
+                cost_daily_tokens=snap.get("cost_daily_tokens", 0),
+                cost_hourly_limit=snap.get("cost_hourly_limit", 0),
+                cost_daily_limit=snap.get("cost_daily_limit", 0),
             )
 
         # ========== QQ 机器人 API ==========
@@ -772,6 +1312,125 @@ class HTTPServerAdapter:
                 logger.error(f"QQ 机器人停止失败: {e}")
                 return {"success": False, "message": f"停止失败: {str(e)[:200]}"}
 
+        # ========== Telegram Bot API ==========
+        def _get_telegram_status() -> Dict[str, Any]:
+            running = "telegram" in getattr(self.engine, "_bg_services", {})
+            tg_cfg = getattr(self.engine.config, 'telegram', None) or {}
+            configured = bool(isinstance(tg_cfg, dict) and tg_cfg.get("bot_token"))
+            info = None
+            if running and hasattr(self.engine, 'telegram_bot'):
+                try:
+                    info = self.engine.telegram_bot.get_me()
+                except Exception:
+                    pass
+            return {"running": running, "configured": configured, "info": info}
+
+        @app.get("/telegram/status")
+        def telegram_status():
+            return {"success": True, **_get_telegram_status()}
+
+        @app.post("/telegram/start")
+        def telegram_start():
+            try:
+                st = _get_telegram_status()
+                if st["running"]:
+                    return {"success": False, "message": "Telegram Bot 已在运行"}
+                if not st["configured"]:
+                    return {"success": False, "message": "未配置 bot_token"}
+                ok = self.engine.start_service("telegram")
+                if not ok:
+                    return {"success": False, "message": "启动失败"}
+                return {"success": True, "message": "Telegram Bot 正在启动"}
+            except Exception as e:
+                return {"success": False, "message": f"启动失败: {str(e)[:200]}"}
+
+        @app.post("/telegram/stop")
+        def telegram_stop():
+            try:
+                ok = self.engine.stop_service("telegram")
+                if not ok:
+                    return {"success": False, "message": "未运行"}
+                return {"success": True, "message": "已停止"}
+            except Exception as e:
+                return {"success": False, "message": f"停止失败: {str(e)[:200]}"}
+
+        # ========== MCP 客户端 API ==========
+        def _get_mcp_client():
+            return getattr(self.engine, 'mcp_client', None)
+
+        @app.get("/mcp/servers")
+        def mcp_list_servers():
+            mcp = _get_mcp_client()
+            if not mcp:
+                return {"success": False, "message": "MCP 客户端未初始化"}
+            return {"success": True, "servers": mcp.list_servers()}
+
+        if PYDANTIC_AVAILABLE:
+            class MCPAddServerRequest(BaseModel):
+                name: str
+                command: str
+                args: Optional[List[str]] = None
+                env: Optional[Dict[str, str]] = None
+                cwd: Optional[str] = None
+        else:
+            MCPAddServerRequest = None  # type: ignore
+
+        @app.post("/mcp/servers")
+        def mcp_add_server(request: Request):
+            mcp = _get_mcp_client()
+            if not mcp:
+                return {"success": False, "message": "MCP 客户端未初始化"}
+            try:
+                body = json.loads(request.body().decode("utf-8")) if hasattr(request, "body") else {}
+                if not body.get("name") or not body.get("command"):
+                    return {"success": False, "message": "name 和 command 必填"}
+                from castorice.mcp_client import MCPServerConfig
+                cfg = MCPServerConfig(
+                    name=body["name"],
+                    command=body["command"],
+                    args=body.get("args", []),
+                    env=body.get("env", {}),
+                    cwd=body.get("cwd"),
+                )
+                mcp.add_server(cfg)
+                return {"success": True, "message": f"已添加 MCP 服务器: {body['name']}"}
+            except Exception as e:
+                return {"success": False, "message": f"添加失败: {str(e)[:200]}"}
+
+        @app.delete("/mcp/servers/{name}")
+        def mcp_remove_server(name: str):
+            mcp = _get_mcp_client()
+            if not mcp:
+                return {"success": False, "message": "MCP 客户端未初始化"}
+            try:
+                mcp.remove_server(name)
+                return {"success": True, "message": f"已移除: {name}"}
+            except Exception as e:
+                return {"success": False, "message": f"移除失败: {str(e)[:200]}"}
+
+        @app.post("/mcp/start")
+        def mcp_start_all():
+            mcp = _get_mcp_client()
+            if not mcp:
+                return {"success": False, "message": "MCP 客户端未初始化"}
+            results = mcp.start_all()
+            return {"success": True, "results": results}
+
+        @app.post("/mcp/stop")
+        def mcp_stop_all():
+            mcp = _get_mcp_client()
+            if not mcp:
+                return {"success": False, "message": "MCP 客户端未初始化"}
+            mcp.stop_all()
+            return {"success": True, "message": "所有 MCP 服务器已停止"}
+
+        @app.get("/mcp/tools")
+        def mcp_tools():
+            mcp = _get_mcp_client()
+            if not mcp:
+                return {"success": False, "message": "MCP 客户端未初始化", "tools": []}
+            return {"success": True, "tools": mcp.get_all_tools()}
+
         @app.get("/tools")
         def get_tools():
             """获取工具列表"""
@@ -801,8 +1460,20 @@ class HTTPServerAdapter:
         @app.delete("/session/{session_id}")
         def delete_session(session_id: str):
             """删除会话"""
-            self.engine.short_term.delete_session(session_id)
-            return {"success": True, "message": f"会话 {session_id} 已删除"}
+            try:
+                self.engine.short_term.delete_session(session_id)
+                # 同步清理状态持久化文件
+                try:
+                    agent = getattr(self.engine, 'agent', None)
+                    sp = getattr(agent, 'state_persistence', None)
+                    if sp is not None and hasattr(sp, 'delete'):
+                        sp.delete(session_id)
+                except Exception:
+                    pass
+                return {"success": True, "message": f"会话 {session_id} 已删除"}
+            except Exception as e:
+                logger.warning(f"删除会话失败 {session_id}: {e}")
+                raise HTTPException(status_code=500, detail=f"删除失败: {str(e)[:100]}")
 
         @app.post("/clear_memory")
         def clear_memory(confirm: bool = False):
@@ -851,13 +1522,27 @@ class HTTPServerAdapter:
         # ========== Electron 客户端专用 REST API ==========
 
         @app.get("/sessions")
-        def list_sessions(limit: int = 50, offset: int = 0):
+        def list_sessions(limit: int = 50, offset: int = 0, include_empty: bool = False):
             """列出所有会话（Electron 客户端用）"""
-            sessions = self.engine.short_term.list_sessions(limit=None)
+            sessions = self.engine.short_term.list_sessions(
+                limit=None, include_empty=include_empty
+            )
             if sessions is None:
                 sessions = []
+            # 额外统计每个会话的消息数
+            try:
+                conn = self.engine.short_term._get_conn()
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT session_id, COUNT(*) as cnt FROM messages GROUP BY session_id"
+                )
+                msg_counts = {row[0]: row[1] for row in cursor.fetchall()}
+            except Exception:
+                msg_counts = {}
             total = len(sessions)
             paginated = sessions[offset:offset + limit]
+            for s in paginated:
+                s["message_count"] = msg_counts.get(s["session_id"], 0)
             return {
                 "sessions": paginated,
                 "total": total,
@@ -885,6 +1570,17 @@ class HTTPServerAdapter:
                 "success": True,
                 "session_id": session_id,
                 "title": request.title,
+            }
+
+        @app.get("/messages/search")
+        def search_messages(query: str, session_id: Optional[str] = None, limit: int = 20):
+            """FTS5 全文搜索会话消息"""
+            results = self.engine.short_term.search_messages(query, session_id=session_id, limit=limit)
+            return {
+                "success": True,
+                "query": query,
+                "count": len(results),
+                "results": results,
             }
 
         @app.get("/settings")
@@ -941,6 +1637,80 @@ class HTTPServerAdapter:
                 "message": "配置已更新（运行时生效）",
                 "applied": applied,
             }
+
+        # ========== LLM 供应商管理 API ==========
+
+        @app.get("/llm/providers")
+        def list_llm_providers():
+            """列出所有可用的 LLM 供应商（内置 + 自定义）"""
+            try:
+                ma = getattr(self.engine, 'model_adapter', None)
+                if ma and hasattr(ma, 'list_providers'):
+                    providers = ma.list_providers()
+                    return {"success": True, "providers": providers}
+                return {"success": False, "message": "ModelAdapter 未就绪"}
+            except Exception as e:
+                return {"success": False, "message": str(e)}
+
+        @app.post("/llm/providers")
+        def add_custom_provider(request: CustomProviderRequest):
+            """新增自定义 OpenAI 兼容供应商"""
+            try:
+                ma = getattr(self.engine, 'model_adapter', None)
+                if not ma or not hasattr(ma, 'register_custom_provider'):
+                    return {"success": False, "message": "ModelAdapter 未就绪"}
+                # 用 name 生成一个稳定的 provider_id
+                import hashlib
+                raw_id = request.name.strip().lower().replace(" ", "_")
+                if not raw_id:
+                    return {"success": False, "message": "名称不能为空"}
+                provider_id = f"custom_{raw_id}"
+                ma.register_custom_provider(
+                    provider_id=provider_id,
+                    name=request.name.strip(),
+                    base_url=request.base_url.strip(),
+                    api_key=request.api_key,
+                    model=request.model.strip(),
+                )
+                return {"success": True, "provider_id": provider_id, "message": "已添加自定义供应商"}
+            except ValueError as e:
+                return {"success": False, "message": str(e)}
+            except Exception as e:
+                return {"success": False, "message": str(e)}
+
+        @app.put("/llm/providers/{provider_id}")
+        def update_custom_provider(provider_id: str, request: UpdateCustomProviderRequest):
+            """更新自定义供应商配置"""
+            try:
+                ma = getattr(self.engine, 'model_adapter', None)
+                if not ma or not hasattr(ma, 'update_custom_provider'):
+                    return {"success": False, "message": "ModelAdapter 未就绪"}
+                ok = ma.update_custom_provider(
+                    provider_id=provider_id,
+                    name=request.name,
+                    base_url=request.base_url,
+                    api_key=request.api_key,
+                    model=request.model,
+                )
+                if ok:
+                    return {"success": True, "message": "已更新"}
+                return {"success": False, "message": "供应商不存在或非自定义供应商"}
+            except Exception as e:
+                return {"success": False, "message": str(e)}
+
+        @app.delete("/llm/providers/{provider_id}")
+        def delete_custom_provider(provider_id: str):
+            """删除自定义供应商"""
+            try:
+                ma = getattr(self.engine, 'model_adapter', None)
+                if not ma or not hasattr(ma, 'unregister_custom_provider'):
+                    return {"success": False, "message": "ModelAdapter 未就绪"}
+                ok = ma.unregister_custom_provider(provider_id)
+                if ok:
+                    return {"success": True, "message": "已删除"}
+                return {"success": False, "message": "供应商不存在或非自定义供应商"}
+            except Exception as e:
+                return {"success": False, "message": str(e)}
 
         @app.get("/agent/emotion")
         def get_agent_emotion():
@@ -1122,11 +1892,11 @@ class HTTPServerAdapter:
 
         @app.get("/eigenflux/relations")
         async def ef_get_relations():
-            """获取 EigenFlux 社交关系列表（异步）"""
+            """获取 EigenFlux 好友列表（异步）"""
             try:
                 from castorice.tools.eigenflux_tool import _run_cli_async
                 code, stdout, stderr = await _run_cli_async([
-                    "relation", "list", "--direction", "incoming",
+                    "relation", "friends",
                     "--format", "json", "--no-interactive",
                 ])
                 if code != 0:
@@ -1142,6 +1912,18 @@ class HTTPServerAdapter:
     async def _start_server(self) -> None:
         """启动 HTTP 服务器（异步）"""
         self._loop = asyncio.get_running_loop()
+
+        # 屏蔽 Windows 下 WebSocket 断开时的良性 ConnectionResetError 噪音
+        def _quiet_exception_handler(loop, context):
+            exc = context.get("exception")
+            if isinstance(exc, (ConnectionResetError, OSError)):
+                msg = str(exc)
+                if "10054" in msg or "远程主机强迫关闭" in msg or "Connection reset" in msg:
+                    return  # 静默忽略 WebSocket 断开的良性错误
+            loop.default_exception_handler(context)
+
+        self._loop.set_exception_handler(_quiet_exception_handler)
+
         self._app = self._create_app()
 
         # 注册意识引擎思维回调，通过 WebSocket 广播
@@ -1239,6 +2021,9 @@ class HTTPServerAdapter:
         """在后台线程中启动服务器"""
         self._running = True
         self._error = None
+        # P0-1: 启动健康检查器
+        if self._health_checker:
+            self._health_checker.start()
         self._thread = threading.Thread(target=self.run, daemon=True)
         self._thread.start()
         return self._thread
@@ -1250,6 +2035,9 @@ class HTTPServerAdapter:
     def stop(self) -> None:
         """停止服务器（优雅关闭）"""
         self._running = False
+        # P0-1: 停止健康检查器
+        if self._health_checker:
+            self._health_checker.stop()
         if self._server and self._server.started:
             self._server.should_exit = True
             logger.info("HTTP 服务器正在关闭...")

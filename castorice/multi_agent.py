@@ -6,7 +6,18 @@
 - 消息传递与通信
 - 角色分工（分析师/规划师/执行者/总结者）
 - 对话路由与转发
+
+⚠️ DEPRECATED: 本模块尚未接入主循环（ThinkingLoop / AgentCore），
+   目前仅作为架构探索保留。短期不建议在生产中直接使用。
 """
+
+import warnings
+warnings.warn(
+    "castorice.multi_agent is deprecated and not yet integrated into the main loop. "
+    "Use with caution.",
+    DeprecationWarning,
+    stacklevel=2
+)
 
 import json
 import logging
