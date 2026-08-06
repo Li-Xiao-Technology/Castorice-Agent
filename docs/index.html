@@ -118,6 +118,43 @@ nav {
   box-shadow: 0 0 20px rgba(139, 92, 246, 0.4);
 }
 
+/* Language Switcher */
+.nav-lang {
+  justify-self: end;
+  padding-right: 1.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.nav-lang select {
+  background: rgba(20, 15, 35, 0.8);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.85rem;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.2s;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23a78bfa' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.5rem center;
+  padding-right: 1.8rem;
+}
+
+.nav-lang select:hover {
+  border-color: var(--accent);
+}
+
+.nav-lang select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.2);
+}
+
 /* Hero */
 .hero {
   position: relative;
@@ -731,119 +768,127 @@ footer .footer-logo {
 <nav>
   <div class="nav-logo">Castorice Agent</div>
   <div class="nav-links">
-    <a href="#features">特性</a>
-    <a href="#capabilities">能力</a>
-    <a href="#architecture">架构</a>
-    <a href="#start">开始</a>
+    <a href="#features" data-i18n="nav.features">特性</a>
+    <a href="#capabilities" data-i18n="nav.capabilities">能力</a>
+    <a href="#architecture" data-i18n="nav.architecture">架构</a>
+    <a href="#start" data-i18n="nav.start">开始</a>
     <a href="https://github.com/Li-Xiao-Technology/Castorice-Agent" target="_blank" class="nav-cta">GitHub</a>
+  </div>
+  <div class="nav-lang">
+    <select id="langSelect">
+      <option value="zh">简体中文</option>
+      <option value="en">English</option>
+      <option value="ja">日本語</option>
+      <option value="ko">한국어</option>
+    </select>
   </div>
 </nav>
 
 <!-- Hero -->
 <div class="hero">
   <div class="hero-tag">v3.3 · MIT License · Self-Evolving</div>
-  <h1>有内在生命的<br><span class="gradient">自我进化智能体</span></h1>
-  <p class="hero-subtitle">不是按剧本演戏，而是自己写剧本。有情绪、有意识流、会成长、有价值观的 AI 伙伴框架——运行越久，它越像它自己。</p>
+  <h1><span data-i18n="hero.title1">有内在生命的</span><br><span class="gradient" data-i18n="hero.title2">自我进化智能体</span></h1>
+  <p class="hero-subtitle" data-i18n="hero.subtitle">不是按剧本演戏，而是自己写剧本。有情绪、有意识流、会成长、有价值观的 AI 伙伴框架——运行越久，它越像它自己。</p>
   <div class="hero-buttons">
-    <a href="#start" class="btn btn-primary">快速开始</a>
-    <a href="#features" class="btn btn-secondary">了解特性</a>
+    <a href="#start" class="btn btn-primary" data-i18n="hero.btn1">快速开始</a>
+    <a href="#features" class="btn btn-secondary" data-i18n="hero.btn2">了解特性</a>
   </div>
   <div class="hero-stats">
     <div class="stat">
       <div class="stat-num">9</div>
-      <div class="stat-label">记忆类型</div>
+      <div class="stat-label" data-i18n="stat.mem">记忆类型</div>
     </div>
     <div class="stat">
       <div class="stat-num">11</div>
-      <div class="stat-label">原子能力</div>
+      <div class="stat-label" data-i18n="stat.atom">原子能力</div>
     </div>
     <div class="stat">
       <div class="stat-num">8+</div>
-      <div class="stat-label">模型供应商</div>
+      <div class="stat-label" data-i18n="stat.provider">模型供应商</div>
     </div>
     <div class="stat">
       <div class="stat-num">5</div>
-      <div class="stat-label">安全层级</div>
+      <div class="stat-label" data-i18n="stat.sec">安全层级</div>
     </div>
   </div>
-  <div class="scroll-hint">↓ 向下滚动</div>
+  <div class="scroll-hint" data-i18n="hero.scroll">↓ 向下滚动</div>
 </div>
 
 <!-- Features: 核心特性 -->
 <section id="features">
-  <div class="section-label reveal">核心特性</div>
-  <h2 class="section-title reveal">不是工具，是伙伴</h2>
-  <p class="section-desc reveal">情感是底色而不是开关，成长是涌现而不是脚本，安全是免疫系统而不是监狱。</p>
+  <div class="section-label reveal" data-i18n="sec.feat_label">核心特性</div>
+  <h2 class="section-title reveal" data-i18n="sec.feat_title">不是工具，是伙伴</h2>
+  <p class="section-desc reveal" data-i18n="sec.feat_desc">情感是底色而不是开关，成长是涌现而不是脚本，安全是免疫系统而不是监狱。</p>
   <div class="features-grid">
     <div class="feature-card reveal">
       <div class="feature-icon-lg" style="background: linear-gradient(135deg, rgba(139,92,246,0.18), rgba(236,72,153,0.12));">🌊</div>
-      <h3 class="feature-title">情感系统</h3>
-      <p class="feature-desc">PAD 三维情绪模型驱动，情绪像底色一样影响记忆检索、决策偏置和内在动机——不是简单的"请用XX语气回复"。</p>
+      <h3 class="feature-title" data-i18n="feat.f1_t">情感系统</h3>
+      <p class="feature-desc" data-i18n="feat.f1_d">PAD 三维情绪模型驱动，情绪像底色一样影响记忆检索、决策偏置和内在动机——不是简单的"请用XX语气回复"。</p>
     </div>
     <div class="feature-card reveal">
       <div class="feature-icon-lg" style="background: linear-gradient(135deg, rgba(6,182,212,0.18), rgba(59,130,246,0.12));">💫</div>
-      <h3 class="feature-title">意识流引擎</h3>
-      <p class="feature-desc">前台集中注意力回应，后台思维漫游。念头积累到阈值会"脱口而出"——基于情绪强度 × 重要性 × 亲密度。</p>
+      <h3 class="feature-title" data-i18n="feat.f2_t">意识流引擎</h3>
+      <p class="feature-desc" data-i18n="feat.f2_d">前台集中注意力回应，后台思维漫游。念头积累到阈值会"脱口而出"——基于情绪强度 × 重要性 × 亲密度。</p>
     </div>
     <div class="feature-card reveal">
       <div class="feature-icon-lg" style="background: linear-gradient(135deg, rgba(16,185,129,0.18), rgba(6,182,212,0.12));">🧠</div>
-      <h3 class="feature-title">九种记忆</h3>
-      <p class="feature-desc">自传式、经历流、技能、意图追踪、知识卡片……统一检索接口聚合所有记忆源，空闲自动触发睡眠整理。</p>
+      <h3 class="feature-title" data-i18n="feat.f3_t">九种记忆</h3>
+      <p class="feature-desc" data-i18n="feat.f3_d">自传式、经历流、技能、意图追踪、知识卡片……统一检索接口聚合所有记忆源，空闲自动触发睡眠整理。</p>
     </div>
     <div class="feature-card reveal">
       <div class="feature-icon-lg" style="background: linear-gradient(135deg, rgba(236,72,153,0.18), rgba(249,115,22,0.12));">🌱</div>
-      <h3 class="feature-title">自我进化</h3>
-      <p class="feature-desc">每次交互沉淀为经历，经历被反思，反思改变自我概念和行为模式。元认知监控自身思维质量，持续学习策略自适应优化。</p>
+      <h3 class="feature-title" data-i18n="feat.f4_t">自我进化</h3>
+      <p class="feature-desc" data-i18n="feat.f4_d">每次交互沉淀为经历，经历被反思，反思改变自我概念和行为模式。元认知监控自身思维质量，持续学习策略自适应优化。</p>
     </div>
     <div class="feature-card reveal">
       <div class="feature-icon-lg" style="background: linear-gradient(135deg, rgba(249,115,22,0.18), rgba(239,68,68,0.12));">⚖️</div>
-      <h3 class="feature-title">价值观系统</h3>
-      <p class="feature-desc">基于 Schwartz 价值观理论，10 个维度从行为中逐步形成价值倾向。价值观冲突触发认知失调和深度反思，动机从价值观中推导而非硬编码。</p>
+      <h3 class="feature-title" data-i18n="feat.f5_t">价值观系统</h3>
+      <p class="feature-desc" data-i18n="feat.f5_d">基于 Schwartz 价值观理论，10 个维度从行为中逐步形成价值倾向。价值观冲突触发认知失调和深度反思，动机从价值观中推导而非硬编码。</p>
     </div>
     <div class="feature-card reveal">
       <div class="feature-icon-lg" style="background: linear-gradient(135deg, rgba(59,130,246,0.18), rgba(139,92,246,0.12));">🌐</div>
-      <h3 class="feature-title">自主行动</h3>
-      <p class="feature-desc">不等用户问才动。双线程并行：响应线程 + 自主循环线程。会自己刷动态、发广播、和其他 Agent 聊天。EigenFlux 网络集成。</p>
+      <h3 class="feature-title" data-i18n="feat.f6_t">自主行动</h3>
+      <p class="feature-desc" data-i18n="feat.f6_d">不等用户问才动。双线程并行：响应线程 + 自主循环线程。会自己刷动态、发广播、和其他 Agent 聊天。EigenFlux 网络集成。</p>
     </div>
   </div>
 </section>
 
 <!-- Capabilities: 能力清单 -->
 <section id="capabilities">
-  <div class="section-label reveal">能力清单</div>
-  <h2 class="section-title reveal">底层硬实力</h2>
-  <p class="section-desc reveal">情感和人格是灵魂，但干活还得看硬实力——从沙箱执行到浏览器控制，从多模型到安全防线。</p>
+  <div class="section-label reveal" data-i18n="sec.cap_label">能力清单</div>
+  <h2 class="section-title reveal" data-i18n="sec.cap_title">底层硬实力</h2>
+  <p class="section-desc reveal" data-i18n="sec.cap_desc">情感和人格是灵魂，但干活还得看硬实力——从沙箱执行到浏览器控制，从多模型到安全防线。</p>
   <div class="spec-grid">
     <div class="spec-card reveal">
       <div class="spec-header">
         <div class="spec-icon">💻</div>
-        <div class="spec-title">执行环境</div>
+        <div class="spec-title" data-i18n="cap.c1_t">执行环境</div>
       </div>
       <div class="spec-item">
         <div class="spec-item-left">
-          <div class="spec-item-title">本地终端</div>
-          <div class="spec-item-sub">直接在你的机器上运行命令</div>
+          <div class="spec-item-title" data-i18n="cap.c1_1t">本地终端</div>
+          <div class="spec-item-sub" data-i18n="cap.c1_1s">直接在你的机器上运行命令</div>
         </div>
         <div class="spec-check">✓</div>
       </div>
       <div class="spec-item">
         <div class="spec-item-left">
           <div class="spec-item-title">Docker</div>
-          <div class="spec-item-sub">带安全加固的隔离容器</div>
+          <div class="spec-item-sub" data-i18n="cap.c1_2s">带安全加固的隔离容器</div>
         </div>
         <div class="spec-check">✓</div>
       </div>
       <div class="spec-item">
         <div class="spec-item-left">
-          <div class="spec-item-title">HTTP 服务</div>
-          <div class="spec-item-sub">REST + SSE 流式输出</div>
+          <div class="spec-item-title">HTTP <span data-i18n="cap.c1_3t">服务</span></div>
+          <div class="spec-item-sub">REST + SSE <span data-i18n="cap.c1_3s">流式输出</span></div>
         </div>
         <div class="spec-check">✓</div>
       </div>
       <div class="spec-item">
         <div class="spec-item-left">
-          <div class="spec-item-title">Tauri 桌面端</div>
-          <div class="spec-item-sub">Windows 一键安装包</div>
+          <div class="spec-item-title">Tauri <span data-i18n="cap.c1_4t">桌面端</span></div>
+          <div class="spec-item-sub" data-i18n="cap.c1_4s">Windows 一键安装包</div>
         </div>
         <div class="spec-check">✓</div>
       </div>
@@ -852,33 +897,33 @@ footer .footer-logo {
     <div class="spec-card reveal">
       <div class="spec-header">
         <div class="spec-icon">⟨/⟩</div>
-        <div class="spec-title">大模型提供商</div>
+        <div class="spec-title" data-i18n="cap.c2_t">大模型提供商</div>
       </div>
       <div class="spec-item">
         <div class="spec-item-left">
           <div class="spec-item-title">OpenAI / Anthropic / DeepSeek</div>
-          <div class="spec-item-sub">主流原生集成</div>
+          <div class="spec-item-sub" data-i18n="cap.c2_1s">主流原生集成</div>
         </div>
         <div class="spec-check">✓</div>
       </div>
       <div class="spec-item">
         <div class="spec-item-left">
-          <div class="spec-item-title">200+ 兼容模型</div>
-          <div class="spec-item-sub">通过 OpenRouter / 自定义 Base URL</div>
+          <div class="spec-item-title"><span data-i18n="cap.c2_2t">200+ 兼容模型</span></div>
+          <div class="spec-item-sub" data-i18n="cap.c2_2s">通过 OpenRouter / 自定义 Base URL</div>
         </div>
         <div class="spec-check">✓</div>
       </div>
       <div class="spec-item">
         <div class="spec-item-left">
-          <div class="spec-item-title">自定义 API 供应商</div>
-          <div class="spec-item-sub">前端一键添加任意 OpenAI 兼容端点</div>
+          <div class="spec-item-title" data-i18n="cap.c2_3t">自定义 API 供应商</div>
+          <div class="spec-item-sub" data-i18n="cap.c2_3s">前端一键添加任意 OpenAI 兼容端点</div>
         </div>
         <div class="spec-check">✓</div>
       </div>
       <div class="spec-item">
         <div class="spec-item-left">
           <div class="spec-item-title">本地 vLLM / Ollama</div>
-          <div class="spec-item-sub">完全本地化运行模型</div>
+          <div class="spec-item-sub" data-i18n="cap.c2_4s">完全本地化运行模型</div>
         </div>
         <div class="spec-check">✓</div>
       </div>
@@ -887,33 +932,33 @@ footer .footer-logo {
     <div class="spec-card reveal">
       <div class="spec-header">
         <div class="spec-icon">🗂</div>
-        <div class="spec-title">技能系统</div>
+        <div class="spec-title" data-i18n="cap.c3_t">技能系统</div>
       </div>
       <div class="spec-item">
         <div class="spec-item-left">
-          <div class="spec-item-title">内置技能</div>
-          <div class="spec-item-sub">文件、搜索、分析、自动化等</div>
+          <div class="spec-item-title" data-i18n="cap.c3_1t">内置技能</div>
+          <div class="spec-item-sub" data-i18n="cap.c3_1s">文件、搜索、分析、自动化等</div>
         </div>
         <div class="spec-check">40+</div>
       </div>
       <div class="spec-item">
         <div class="spec-item-left">
-          <div class="spec-item-title">自动创建技能</div>
-          <div class="spec-item-sub">智能体解决问题时自动写入新技能</div>
+          <div class="spec-item-title" data-i18n="cap.c3_2t">自动创建技能</div>
+          <div class="spec-item-sub" data-i18n="cap.c3_2s">智能体解决问题时自动写入新技能</div>
         </div>
         <div class="spec-check">∞</div>
       </div>
       <div class="spec-item">
         <div class="spec-item-left">
-          <div class="spec-item-title">Agent-to-Agent 网络</div>
-          <div class="spec-item-sub">EigenFlux 广播/订阅/技能交易</div>
+          <div class="spec-item-title">Agent-to-Agent <span data-i18n="cap.c3_3t">网络</span></div>
+          <div class="spec-item-sub">EigenFlux <span data-i18n="cap.c3_3s">广播/订阅/技能交易</span></div>
         </div>
         <div class="spec-check">✓</div>
       </div>
       <div class="spec-item">
         <div class="spec-item-left">
-          <div class="spec-item-title">开放标准</div>
-          <div class="spec-item-sub">可移植的 SKILL.md 格式，随处分享</div>
+          <div class="spec-item-title" data-i18n="cap.c3_4t">开放标准</div>
+          <div class="spec-item-sub" data-i18n="cap.c3_4s">可移植的 SKILL.md 格式，随处分享</div>
         </div>
         <div class="spec-check">✓</div>
       </div>
@@ -922,33 +967,33 @@ footer .footer-logo {
     <div class="spec-card reveal">
       <div class="spec-header">
         <div class="spec-icon">🛡</div>
-        <div class="spec-title">安全与隐私</div>
+        <div class="spec-title" data-i18n="cap.c4_t">安全与隐私</div>
       </div>
       <div class="spec-item">
         <div class="spec-item-left">
-          <div class="spec-item-title">零追踪</div>
-          <div class="spec-item-sub">无遥测，无数据收集</div>
+          <div class="spec-item-title" data-i18n="cap.c4_1t">零追踪</div>
+          <div class="spec-item-sub" data-i18n="cap.c4_1s">无遥测，无数据收集</div>
         </div>
         <div class="spec-check">✓</div>
       </div>
       <div class="spec-item">
         <div class="spec-item-left">
-          <div class="spec-item-title">容器安全加固</div>
-          <div class="spec-item-sub">只读根目录、权限降级、PID 限制</div>
+          <div class="spec-item-title" data-i18n="cap.c4_2t">容器安全加固</div>
+          <div class="spec-item-sub" data-i18n="cap.c4_2s">只读根目录、权限降级、PID 限制</div>
         </div>
         <div class="spec-check">✓</div>
       </div>
       <div class="spec-item">
         <div class="spec-item-left">
-          <div class="spec-item-title">Personastore 本地存储</div>
-          <div class="spec-item-sub">所有记忆存在你机器上的本地目录</div>
+          <div class="spec-item-title">Personastore <span data-i18n="cap.c4_3t">本地存储</span></div>
+          <div class="spec-item-sub" data-i18n="cap.c4_3s">所有记忆存在你机器上的本地目录</div>
         </div>
         <div class="spec-check">✓</div>
       </div>
       <div class="spec-item">
         <div class="spec-item-left">
-          <div class="spec-item-title">MIT 许可证</div>
-          <div class="spec-item-sub">完全开源，每行代码都可审计</div>
+          <div class="spec-item-title">MIT <span data-i18n="cap.c4_4t">许可证</span></div>
+          <div class="spec-item-sub" data-i18n="cap.c4_4s">完全开源，每行代码都可审计</div>
         </div>
         <div class="spec-check">✓</div>
       </div>
@@ -958,59 +1003,59 @@ footer .footer-logo {
 
 <!-- Architecture -->
 <section id="architecture">
-  <div class="section-label reveal">系统架构</div>
-  <h2 class="section-title reveal">三层架构 + 数据主权</h2>
-  <p class="section-desc reveal">感知输入层 → 认知内核层 → 输出行动层，底部 Personastore 人格数据主权层，四个数据域独立读写、可导出迁移。</p>
+  <div class="section-label reveal" data-i18n="sec.arch_label">系统架构</div>
+  <h2 class="section-title reveal" data-i18n="sec.arch_title">三层架构 + 数据主权</h2>
+  <p class="section-desc reveal" data-i18n="sec.arch_desc">感知输入层 → 认知内核层 → 输出行动层，底部 Personastore 人格数据主权层，四个数据域独立读写、可导出迁移。</p>
   <div class="arch-block reveal">
     <div class="arch-layer">
-      <div class="arch-layer-title">感知输入层</div>
+      <div class="arch-layer-title" data-i18n="arch.l1_t">感知输入层</div>
       <div class="arch-layer-content">
-        <span class="arch-tag">用户对话</span>
-        <span class="arch-tag">前端交互</span>
-        <span class="arch-tag">Agent 网络广播</span>
-        <span class="arch-tag">定时事件</span>
+        <span class="arch-tag" data-i18n="arch.l1_1">用户对话</span>
+        <span class="arch-tag" data-i18n="arch.l1_2">前端交互</span>
+        <span class="arch-tag" data-i18n="arch.l1_3">Agent 网络广播</span>
+        <span class="arch-tag" data-i18n="arch.l1_4">定时事件</span>
       </div>
     </div>
     <div class="arch-layer">
-      <div class="arch-layer-title">认知内核层</div>
+      <div class="arch-layer-title" data-i18n="arch.l2_t">认知内核层</div>
       <div class="arch-layer-content">
-        <span class="arch-tag">情感底色</span>
-        <span class="arch-tag">意识流</span>
-        <span class="arch-tag">思维流</span>
-        <span class="arch-tag">自主思考循环</span>
-        <span class="arch-tag">11 原子能力</span>
+        <span class="arch-tag" data-i18n="arch.l2_1">情感底色</span>
+        <span class="arch-tag" data-i18n="arch.l2_2">意识流</span>
+        <span class="arch-tag" data-i18n="arch.l2_3">思维流</span>
+        <span class="arch-tag" data-i18n="arch.l2_4">自主思考循环</span>
+        <span class="arch-tag" data-i18n="arch.l2_5">11 原子能力</span>
       </div>
     </div>
     <div class="arch-layer">
-      <div class="arch-layer-title">记忆 + 自我进化</div>
+      <div class="arch-layer-title" data-i18n="arch.l3_t">记忆 + 自我进化</div>
       <div class="arch-layer-content">
-        <span class="arch-tag">9 种记忆类型</span>
-        <span class="arch-tag">反思</span>
-        <span class="arch-tag">元认知</span>
-        <span class="arch-tag">自我概念</span>
-        <span class="arch-tag">持续学习</span>
+        <span class="arch-tag" data-i18n="arch.l3_1">9 种记忆类型</span>
+        <span class="arch-tag" data-i18n="arch.l3_2">反思</span>
+        <span class="arch-tag" data-i18n="arch.l3_3">元认知</span>
+        <span class="arch-tag" data-i18n="arch.l3_4">自我概念</span>
+        <span class="arch-tag" data-i18n="arch.l3_5">持续学习</span>
       </div>
     </div>
     <div class="arch-layer">
-      <div class="arch-layer-title">支撑 & 防护层</div>
+      <div class="arch-layer-title" data-i18n="arch.l4_t">支撑 & 防护层</div>
       <div class="arch-layer-content">
-        <span class="arch-tag">价值观</span>
-        <span class="arch-tag">动机</span>
-        <span class="arch-tag">目标管理</span>
-        <span class="arch-tag">成本闸</span>
-        <span class="arch-tag">熔断器</span>
-        <span class="arch-tag">五层安全防御</span>
+        <span class="arch-tag" data-i18n="arch.l4_1">价值观</span>
+        <span class="arch-tag" data-i18n="arch.l4_2">动机</span>
+        <span class="arch-tag" data-i18n="arch.l4_3">目标管理</span>
+        <span class="arch-tag" data-i18n="arch.l4_4">成本闸</span>
+        <span class="arch-tag" data-i18n="arch.l4_5">熔断器</span>
+        <span class="arch-tag" data-i18n="arch.l4_6">五层安全防御</span>
       </div>
     </div>
     <div class="arch-layer">
-      <div class="arch-layer-title">Personastore 人格数据主权</div>
+      <div class="arch-layer-title" data-i18n="arch.l5_t">Personastore 人格数据主权</div>
       <div class="arch-layer-content">
-        <span class="arch-tag">经历流</span>
-        <span class="arch-tag">自我概念</span>
-        <span class="arch-tag">情感状态</span>
-        <span class="arch-tag">价值观</span>
-        <span class="arch-tag">访问控制</span>
-        <span class="arch-tag">一键导出</span>
+        <span class="arch-tag" data-i18n="arch.l5_1">经历流</span>
+        <span class="arch-tag" data-i18n="arch.l5_2">自我概念</span>
+        <span class="arch-tag" data-i18n="arch.l5_3">情感状态</span>
+        <span class="arch-tag" data-i18n="arch.l5_4">价值观</span>
+        <span class="arch-tag" data-i18n="arch.l5_5">访问控制</span>
+        <span class="arch-tag" data-i18n="arch.l5_6">一键导出</span>
       </div>
     </div>
   </div>
@@ -1018,75 +1063,75 @@ footer .footer-logo {
 
 <!-- What is Castorice Agent? -->
 <section>
-  <div class="section-label reveal">关于</div>
-  <h2 class="section-title reveal">什么是 Castorice？</h2>
-  <p class="section-desc reveal" style="max-width: 800px; font-size: 1.08rem; line-height: 1.8;">
+  <div class="section-label reveal" data-i18n="sec.what_label">关于</div>
+  <h2 class="section-title reveal" data-i18n="sec.what_title">什么是 Castorice？</h2>
+  <p class="section-desc reveal" style="max-width: 800px; font-size: 1.08rem; line-height: 1.8;" data-i18n="sec.what_desc">
     大部分 Agent 框架是"工具调用编排器"——给个任务，调几个 API，返回结果。Castorice 不一样：它有情绪底色，有意识流在后台流动，会反思自己的行为，会从经历中长出价值观。它不是一个更好用的工具，而是一个会成长的伙伴。
   </p>
-  <p class="reveal" style="color: var(--accent-2); font-family: 'Space Mono', monospace; font-size: 0.95rem; letter-spacing: 0.05em;">
-    参考 Generative Agents / MemGPT / Reflexion 架构思想 · MIT 许可证 · 个人独立开发
+  <p class="reveal" style="color: var(--accent-2); font-family: 'Space Mono', monospace; font-size: 0.95rem; letter-spacing: 0.05em;" data-i18n="sec.what_foot">
+    MIT 许可证 · 个人独立开发
   </p>
 </section>
 
 <!-- Scenarios / Use Cases -->
 <section id="scenarios">
-  <div class="section-label reveal">使用场景</div>
-  <h2 class="section-title reveal">它能做什么</h2>
-  <p class="section-desc reveal">不只是问答——Castorice 能记忆、能规划、能自主行动。</p>
+  <div class="section-label reveal" data-i18n="sec.scen_label">使用场景</div>
+  <h2 class="section-title reveal" data-i18n="sec.scen_title">它能做什么</h2>
+  <p class="section-desc reveal" data-i18n="sec.scen_desc">不只是问答——Castorice 能记忆、能规划、能自主行动。</p>
   <div class="features-grid">
     <div class="feature-card reveal">
       <div class="feature-icon-lg" style="background: linear-gradient(135deg, rgba(139,92,246,0.18), rgba(236,72,153,0.12));">🗣️</div>
-      <h3 class="feature-title">长期陪伴</h3>
-      <p class="feature-desc">记住你上次聊到一半的项目、你喜欢的沟通风格、你正在纠结的决策。跨会话、跨天、跨月——它不会忘。</p>
+      <h3 class="feature-title" data-i18n="scen.s1_t">长期陪伴</h3>
+      <p class="feature-desc" data-i18n="scen.s1_d">记住你上次聊到一半的项目、你喜欢的沟通风格、你正在纠结的决策。跨会话、跨天、跨月——它不会忘。</p>
     </div>
     <div class="feature-card reveal">
       <div class="feature-icon-lg" style="background: linear-gradient(135deg, rgba(249,115,22,0.18), rgba(236,72,153,0.12));">🔄</div>
-      <h3 class="feature-title">自动化流程</h3>
-      <p class="feature-desc">定时任务 + 自主循环 + 浏览器自动化。每天早上帮你整理信息，每周生成复盘报告，全程无人值守。</p>
+      <h3 class="feature-title" data-i18n="scen.s2_t">自动化流程</h3>
+      <p class="feature-desc" data-i18n="scen.s2_d">定时任务 + 自主循环 + 浏览器自动化。每天早上帮你整理信息，每周生成复盘报告，全程无人值守。</p>
     </div>
     <div class="feature-card reveal">
       <div class="feature-icon-lg" style="background: linear-gradient(135deg, rgba(6,182,212,0.18), rgba(16,185,129,0.12));">📦</div>
-      <h3 class="feature-title">数据主权</h3>
-      <p class="feature-desc">所有记忆、人格、经历存在你本地 Personastore 里。一键导出，随时迁移，不锁在任何云端。</p>
+      <h3 class="feature-title" data-i18n="scen.s3_t">数据主权</h3>
+      <p class="feature-desc" data-i18n="scen.s3_d">所有记忆、人格、经历存在你本地 Personastore 里。一键导出，随时迁移，不锁在任何云端。</p>
     </div>
   </div>
 </section>
 
 <!-- Quick Start -->
 <section id="start">
-  <div class="section-label reveal">快速开始</div>
-  <h2 class="section-title reveal">三行命令，跑起来</h2>
-  <p class="section-desc reveal">Pip 安装、Docker 部署、源码编译，总有一种适合你。</p>
+  <div class="section-label reveal" data-i18n="sec.start_label">快速开始</div>
+  <h2 class="section-title reveal" data-i18n="sec.start_title">三行命令，跑起来</h2>
+  <p class="section-desc reveal" data-i18n="sec.start_desc">Pip 安装、Docker 部署、源码编译，总有一种适合你。</p>
 
   <div class="steps-list">
     <div class="step reveal">
       <div class="step-num">1</div>
       <div class="step-content">
-        <div class="step-title">安装</div>
+        <div class="step-title" data-i18n="start.s1_t">安装</div>
         <div class="code-block">pip install castorice-agent[http]</div>
-        <div class="step-desc">一行命令装好。Windows 用户也可以双击仓库里的 <code style="color: var(--accent-2);">start.bat</code> 自动搞定环境。</div>
+        <div class="step-desc" data-i18n="start.s1_d">一行命令装好。Windows 用户也可以双击仓库里的 start.bat 自动搞定环境。</div>
       </div>
     </div>
 
     <div class="step reveal">
       <div class="step-num">2</div>
       <div class="step-content">
-        <div class="step-title">填入 API Key</div>
-        <div class="code-block"># 启动后自动生成配置目录，填入 Key 即可
-castorice            # 命令行交互模式
-castorice --mode http  # 或启动 HTTP 服务配合前端</div>
-        <div class="step-desc">支持 OpenAI / DeepSeek / OpenRouter / 任意自定义端点，前端 GUI 里一键切换供应商。</div>
+        <div class="step-title" data-i18n="start.s2_t">填入 API Key</div>
+        <div class="code-block"># <span data-i18n="start.s2_c1">启动后自动生成配置目录，填入 Key 即可</span>
+castorice            # <span data-i18n="start.s2_c2">命令行交互模式</span>
+castorice --mode http  # <span data-i18n="start.s2_c3">或启动 HTTP 服务配合前端</span></div>
+        <div class="step-desc" data-i18n="start.s2_d">支持 OpenAI / DeepSeek / OpenRouter / 任意自定义端点，前端 GUI 里一键切换供应商。</div>
       </div>
     </div>
 
     <div class="step reveal">
       <div class="step-num">3</div>
       <div class="step-content">
-        <div class="step-title">Docker 部署（可选）</div>
+        <div class="step-title" data-i18n="start.s3_t">Docker 部署（可选）</div>
         <div class="code-block">docker pull lixiaolive/castorice-agent:latest
-# 或 ghcr.io/li-xiao-technology/castorice-agent:latest
+# <span data-i18n="start.s3_c2">或 ghcr.io/li-xiao-technology/castorice-agent:latest</span>
 docker compose up -d</div>
-        <div class="step-desc">镜像已发布到 Docker Hub 和 ghcr.io，数据持久化 + 健康检查开箱即用。</div>
+        <div class="step-desc" data-i18n="start.s3_d">镜像已发布到 Docker Hub 和 ghcr.io，数据持久化 + 健康检查开箱即用。</div>
       </div>
     </div>
   </div>
@@ -1094,11 +1139,11 @@ docker compose up -d</div>
 
 <!-- CTA -->
 <div class="cta-banner reveal">
-  <h2>启动的那一刻，它就开始活着。</h2>
-  <p>开源、免费、MIT 许可。跑在你自己的机器上，数据不离开你。</p>
+  <h2 data-i18n="cta.title">启动的那一刻，它就开始活着。</h2>
+  <p data-i18n="cta.desc">开源、免费、MIT 许可。跑在你自己的机器上，数据不离开你。</p>
   <div class="hero-buttons" style="justify-content: center; animation: none; opacity: 1;">
-    <a href="https://github.com/Li-Xiao-Technology/Castorice-Agent" target="_blank" class="btn btn-primary">GitHub 仓库</a>
-    <a href="#features" class="btn btn-secondary">回到特性</a>
+    <a href="https://github.com/Li-Xiao-Technology/Castorice-Agent" target="_blank" class="btn btn-primary" data-i18n="cta.btn1">GitHub 仓库</a>
+    <a href="#features" class="btn btn-secondary" data-i18n="cta.btn2">回到特性</a>
   </div>
 </div>
 
@@ -1107,31 +1152,31 @@ docker compose up -d</div>
   <div class="footer-wrap">
     <div class="footer-col">
       <div class="footer-logo" style="text-align: left; margin-bottom: 0.8rem;">Castorice</div>
-      <p style="color: var(--fg-dim); font-size: 0.9rem; line-height: 1.7;">有内在生命的自我进化智能体。MIT 许可证，个人独立开发。</p>
+      <p style="color: var(--fg-dim); font-size: 0.9rem; line-height: 1.7;" data-i18n="foot.brand">有内在生命的自我进化智能体。MIT 许可证，个人独立开发。</p>
     </div>
     <div class="footer-col">
-      <h4>导航</h4>
+      <h4 data-i18n="foot.nav_t">导航</h4>
       <ul>
-        <li><a href="#features">特性</a></li>
-        <li><a href="#capabilities">能力</a></li>
-        <li><a href="#architecture">架构</a></li>
-        <li><a href="#start">开始</a></li>
+        <li><a href="#features" data-i18n="nav.features">特性</a></li>
+        <li><a href="#capabilities" data-i18n="nav.capabilities">能力</a></li>
+        <li><a href="#architecture" data-i18n="nav.architecture">架构</a></li>
+        <li><a href="#start" data-i18n="nav.start">开始</a></li>
       </ul>
     </div>
     <div class="footer-col">
-      <h4>资源</h4>
+      <h4 data-i18n="foot.res_t">资源</h4>
       <ul>
         <li><a href="https://github.com/Li-Xiao-Technology/Castorice-Agent" target="_blank">GitHub</a></li>
         <li><a href="https://github.com/Li-Xiao-Technology/Castorice-Agent/issues" target="_blank">Issues</a></li>
       </ul>
     </div>
     <div class="footer-col">
-      <h4>关于</h4>
-      <p style="color: var(--fg-dim); font-size: 0.85rem; line-height: 1.7;">Castorice-Agent 是 Lixiao 独立开发的有内在生命的自我进化智能体框架。</p>
+      <h4 data-i18n="foot.about_t">关于</h4>
+      <p style="color: var(--fg-dim); font-size: 0.85rem; line-height: 1.7;" data-i18n="foot.about_d">Castorice-Agent 是 Lixiao 独立开发的有内在生命的自我进化智能体框架。</p>
     </div>
   </div>
   <div class="footer-bottom">
-    © 2026 Lixiao · MIT License · 以最少的限制，最大的自由
+    © 2026 Lixiao · MIT License · <span data-i18n="foot.license_slogan">以最少的限制，最大的自由</span>
   </div>
 </footer>
 
@@ -1165,6 +1210,328 @@ docker compose up -d</div>
   }, { threshold: 0.1 });
   document.querySelectorAll('.reveal').forEach(function(el) {
     observer.observe(el);
+  });
+})();
+
+// ========== i18n ==========
+var I18N = {
+  zh: {
+    "nav.features": "特性", "nav.capabilities": "能力", "nav.architecture": "架构", "nav.start": "开始",
+    "hero.title1": "有内在生命的", "hero.title2": "自我进化智能体",
+    "hero.subtitle": "不是按剧本演戏，而是自己写剧本。有情绪、有意识流、会成长、有价值观的 AI 伙伴框架——运行越久，它越像它自己。",
+    "hero.btn1": "快速开始", "hero.btn2": "了解特性", "hero.scroll": "↓ 向下滚动",
+    "stat.mem": "记忆类型", "stat.atom": "原子能力", "stat.provider": "模型供应商", "stat.sec": "安全层级",
+    "sec.feat_label": "核心特性", "sec.feat_title": "不是工具，是伙伴",
+    "sec.feat_desc": "情感是底色而不是开关，成长是涌现而不是脚本，安全是免疫系统而不是监狱。",
+    "feat.f1_t": "情感系统", "feat.f1_d": "PAD 三维情绪模型驱动，情绪像底色一样影响记忆检索、决策偏置和内在动机——不是简单的\"请用XX语气回复\"。",
+    "feat.f2_t": "意识流引擎", "feat.f2_d": "前台集中注意力回应，后台思维漫游。念头积累到阈值会\"脱口而出\"——基于情绪强度 × 重要性 × 亲密度。",
+    "feat.f3_t": "九种记忆", "feat.f3_d": "自传式、经历流、技能、意图追踪、知识卡片……统一检索接口聚合所有记忆源，空闲自动触发睡眠整理。",
+    "feat.f4_t": "自我进化", "feat.f4_d": "每次交互沉淀为经历，经历被反思，反思改变自我概念和行为模式。元认知监控自身思维质量，持续学习策略自适应优化。",
+    "feat.f5_t": "价值观系统", "feat.f5_d": "基于 Schwartz 价值观理论，10 个维度从行为中逐步形成价值倾向。价值观冲突触发认知失调和深度反思，动机从价值观中推导而非硬编码。",
+    "feat.f6_t": "自主行动", "feat.f6_d": "不等用户问才动。双线程并行：响应线程 + 自主循环线程。会自己刷动态、发广播、和其他 Agent 聊天。EigenFlux 网络集成。",
+    "sec.cap_label": "能力清单", "sec.cap_title": "底层硬实力",
+    "sec.cap_desc": "情感和人格是灵魂，但干活还得看硬实力——从沙箱执行到浏览器控制，从多模型到安全防线。",
+    "cap.c1_t": "执行环境",
+    "cap.c1_1t": "本地终端", "cap.c1_1s": "直接在你的机器上运行命令",
+    "cap.c1_2s": "带安全加固的隔离容器",
+    "cap.c1_3t": "服务", "cap.c1_3s": "流式输出",
+    "cap.c1_4t": "桌面端", "cap.c1_4s": "Windows 一键安装包",
+    "cap.c2_t": "大模型提供商",
+    "cap.c2_1s": "主流原生集成",
+    "cap.c2_2t": "200+ 兼容模型", "cap.c2_2s": "通过 OpenRouter / 自定义 Base URL",
+    "cap.c2_3t": "自定义 API 供应商", "cap.c2_3s": "前端一键添加任意 OpenAI 兼容端点",
+    "cap.c2_4s": "完全本地化运行模型",
+    "cap.c3_t": "技能系统",
+    "cap.c3_1t": "内置技能", "cap.c3_1s": "文件、搜索、分析、自动化等",
+    "cap.c3_2t": "自动创建技能", "cap.c3_2s": "智能体解决问题时自动写入新技能",
+    "cap.c3_3t": "网络", "cap.c3_3s": "广播/订阅/技能交易",
+    "cap.c3_4t": "开放标准", "cap.c3_4s": "可移植的 SKILL.md 格式，随处分享",
+    "cap.c4_t": "安全与隐私",
+    "cap.c4_1t": "零追踪", "cap.c4_1s": "无遥测，无数据收集",
+    "cap.c4_2t": "容器安全加固", "cap.c4_2s": "只读根目录、权限降级、PID 限制",
+    "cap.c4_3t": "本地存储", "cap.c4_3s": "所有记忆存在你机器上的本地目录",
+    "cap.c4_4t": "许可证", "cap.c4_4s": "完全开源，每行代码都可审计",
+    "sec.arch_label": "系统架构", "sec.arch_title": "三层架构 + 数据主权",
+    "sec.arch_desc": "感知输入层 → 认知内核层 → 输出行动层，底部 Personastore 人格数据主权层，四个数据域独立读写、可导出迁移。",
+    "arch.l1_t": "感知输入层",
+    "arch.l1_1": "用户对话", "arch.l1_2": "前端交互", "arch.l1_3": "Agent 网络广播", "arch.l1_4": "定时事件",
+    "arch.l2_t": "认知内核层",
+    "arch.l2_1": "情感底色", "arch.l2_2": "意识流", "arch.l2_3": "思维流", "arch.l2_4": "自主思考循环", "arch.l2_5": "11 原子能力",
+    "arch.l3_t": "记忆 + 自我进化",
+    "arch.l3_1": "9 种记忆类型", "arch.l3_2": "反思", "arch.l3_3": "元认知", "arch.l3_4": "自我概念", "arch.l3_5": "持续学习",
+    "arch.l4_t": "支撑 & 防护层",
+    "arch.l4_1": "价值观", "arch.l4_2": "动机", "arch.l4_3": "目标管理", "arch.l4_4": "成本闸", "arch.l4_5": "熔断器", "arch.l4_6": "五层安全防御",
+    "arch.l5_t": "Personastore 人格数据主权",
+    "arch.l5_1": "经历流", "arch.l5_2": "自我概念", "arch.l5_3": "情感状态", "arch.l5_4": "价值观", "arch.l5_5": "访问控制", "arch.l5_6": "一键导出",
+    "sec.what_label": "关于", "sec.what_title": "什么是 Castorice？",
+    "sec.what_desc": "大部分 Agent 框架是\"工具调用编排器\"——给个任务，调几个 API，返回结果。Castorice 不一样：它有情绪底色，有意识流在后台流动，会反思自己的行为，会从经历中长出价值观。它不是一个更好用的工具，而是一个会成长的伙伴。",
+    "sec.what_foot": "MIT 许可证 · 个人独立开发",
+    "sec.scen_label": "使用场景", "sec.scen_title": "它能做什么",
+    "sec.scen_desc": "不只是问答——Castorice 能记忆、能规划、能自主行动。",
+    "scen.s1_t": "长期陪伴", "scen.s1_d": "记住你上次聊到一半的项目、你喜欢的沟通风格、你正在纠结的决策。跨会话、跨天、跨月——它不会忘。",
+    "scen.s2_t": "自动化流程", "scen.s2_d": "定时任务 + 自主循环 + 浏览器自动化。每天早上帮你整理信息，每周生成复盘报告，全程无人值守。",
+    "scen.s3_t": "数据主权", "scen.s3_d": "所有记忆、人格、经历存在你本地 Personastore 里。一键导出，随时迁移，不锁在任何云端。",
+    "sec.start_label": "快速开始", "sec.start_title": "三行命令，跑起来",
+    "sec.start_desc": "Pip 安装、Docker 部署、源码编译，总有一种适合你。",
+    "start.s1_t": "安装", "start.s1_d": "一行命令装好。Windows 用户也可以双击仓库里的 start.bat 自动搞定环境。",
+    "start.s2_t": "填入 API Key",
+    "start.s2_c1": "启动后自动生成配置目录，填入 Key 即可",
+    "start.s2_c2": "命令行交互模式", "start.s2_c3": "或启动 HTTP 服务配合前端",
+    "start.s2_d": "支持 OpenAI / DeepSeek / OpenRouter / 任意自定义端点，前端 GUI 里一键切换供应商。",
+    "start.s3_t": "Docker 部署（可选）",
+    "start.s3_c2": "或 ghcr.io/li-xiao-technology/castorice-agent:latest",
+    "start.s3_d": "镜像已发布到 Docker Hub 和 ghcr.io，数据持久化 + 健康检查开箱即用。",
+    "cta.title": "启动的那一刻，它就开始活着。",
+    "cta.desc": "开源、免费、MIT 许可。跑在你自己的机器上，数据不离开你。",
+    "cta.btn1": "GitHub 仓库", "cta.btn2": "回到特性",
+    "foot.brand": "有内在生命的自我进化智能体。MIT 许可证，个人独立开发。",
+    "foot.nav_t": "导航", "foot.res_t": "资源", "foot.about_t": "关于",
+    "foot.about_d": "Castorice-Agent 是 Lixiao 独立开发的有内在生命的自我进化智能体框架。",
+    "foot.license_slogan": "以最少的限制，最大的自由"
+  },
+  en: {
+    "nav.features": "Features", "nav.capabilities": "Capabilities", "nav.architecture": "Architecture", "nav.start": "Quick Start",
+    "hero.title1": "A Self-Evolving Agent", "hero.title2": "With Inner Life",
+    "hero.subtitle": "Not acting from a script — it writes its own. An AI companion framework with emotions, stream of consciousness, growth, and values. The longer it runs, the more it becomes itself.",
+    "hero.btn1": "Get Started", "hero.btn2": "Explore Features", "hero.scroll": "↓ Scroll",
+    "stat.mem": "Memory Types", "stat.atom": "Atomic Skills", "stat.provider": "LLM Providers", "stat.sec": "Security Layers",
+    "sec.feat_label": "Core Features", "sec.feat_title": "Not a Tool. A Companion.",
+    "sec.feat_desc": "Emotion as a backdrop, not a toggle. Growth as emergence, not a script. Security as an immune system, not a prison.",
+    "feat.f1_t": "Affective System", "feat.f1_d": "Driven by the PAD 3-dimensional emotion model. Mood colors memory retrieval, decision bias, and intrinsic motivation — beyond just \"reply in a cheerful tone.\"",
+    "feat.f2_t": "Stream of Consciousness", "feat.f2_d": "Focused response in the foreground, wandering thoughts in the background. Ideas accumulate and \"blurt out\" past a threshold — weighted by mood × importance × intimacy.",
+    "feat.f3_t": "Nine Memories", "feat.f3_d": "Autobiographical, episodic stream, skills, intention tracking, knowledge cards… A unified retrieval layer aggregates all sources; idle cycles trigger sleep-phase consolidation.",
+    "feat.f4_t": "Self-Evolution", "feat.f4_d": "Every interaction becomes an episode, episodes get reflected on, reflections reshape self-concept and behavior. Metacognition monitors thought quality; learning strategies self-tune.",
+    "feat.f5_t": "Value System", "feat.f5_d": "Based on Schwartz value theory, 10 dimensions gradually form tendencies from behavior. Value conflicts trigger cognitive dissonance and deep reflection; motives are derived, not hardcoded.",
+    "feat.f6_t": "Autonomous Action", "feat.f6_d": "It doesn't wait to be asked. Dual threads: responsive + autonomous loop. Browses feeds, broadcasts, chats with other agents on its own. EigenFlux network native.",
+    "sec.cap_label": "Capabilities", "sec.cap_title": "Raw Underlying Power",
+    "sec.cap_desc": "Affect and personality are the soul — but delivery depends on raw power. From sandbox execution to browser automation, multi-model to defense layers.",
+    "cap.c1_t": "Execution Environments",
+    "cap.c1_1t": "Local Terminal", "cap.c1_1s": "Runs commands directly on your machine",
+    "cap.c1_2s": "Hardened isolated containers",
+    "cap.c1_3t": "Server", "cap.c1_3s": "Streaming output",
+    "cap.c1_4t": "Desktop", "cap.c1_4s": "One-click Windows installer",
+    "cap.c2_t": "LLM Providers",
+    "cap.c2_1s": "First-class native integrations",
+    "cap.c2_2t": "200+ Compatible Models", "cap.c2_2s": "Via OpenRouter / custom Base URL",
+    "cap.c2_3t": "Custom API Providers", "cap.c2_3s": "Add any OpenAI-compatible endpoint from the GUI",
+    "cap.c2_4s": "Run models fully locally",
+    "cap.c3_t": "Skill System",
+    "cap.c3_1t": "Built-in Skills", "cap.c3_1s": "Files, search, analysis, automation…",
+    "cap.c3_2t": "Auto Skill Creation", "cap.c3_2s": "Agent writes new skills as it solves problems",
+    "cap.c3_3t": "Network", "cap.c3_3s": "broadcast / subscribe / skill trading",
+    "cap.c3_4t": "Open Standards", "cap.c3_4s": "Portable SKILL.md format, shareable anywhere",
+    "cap.c4_t": "Security & Privacy",
+    "cap.c4_1t": "Zero Telemetry", "cap.c4_1s": "No tracking, no data collection",
+    "cap.c4_2t": "Container Hardening", "cap.c4_2s": "Read-only root, dropped privileges, PID limits",
+    "cap.c4_3t": "Local Storage", "cap.c4_3s": "All memories live in a local Personastore folder on your machine",
+    "cap.c4_4t": "License", "cap.c4_4s": "Fully open source, every line auditable",
+    "sec.arch_label": "Architecture", "sec.arch_title": "Three Layers + Data Sovereignty",
+    "sec.arch_desc": "Perception Input → Cognitive Core → Output & Action, with a Personastore personality sovereignty layer underneath. Four data domains with independent R/W and export/import.",
+    "arch.l1_t": "Perception Input Layer",
+    "arch.l1_1": "User Dialog", "arch.l1_2": "Frontend Interactions", "arch.l1_3": "Agent Network Broadcasts", "arch.l1_4": "Scheduled Events",
+    "arch.l2_t": "Cognitive Core Layer",
+    "arch.l2_1": "Affective Backdrop", "arch.l2_2": "Consciousness Stream", "arch.l2_3": "Thought Stream", "arch.l2_4": "Autonomous Loop", "arch.l2_5": "11 Atomic Abilities",
+    "arch.l3_t": "Memory + Self-Evolution",
+    "arch.l3_1": "9 Memory Types", "arch.l3_2": "Reflection", "arch.l3_3": "Metacognition", "arch.l3_4": "Self-Concept", "arch.l3_5": "Lifelong Learning",
+    "arch.l4_t": "Support & Defense Layer",
+    "arch.l4_1": "Values", "arch.l4_2": "Motives", "arch.l4_3": "Goal Mgmt", "arch.l4_4": "Cost Gate", "arch.l4_5": "Circuit Breaker", "arch.l4_6": "5-Layer Security",
+    "arch.l5_t": "Personastore — Personality Sovereignty",
+    "arch.l5_1": "Episode Stream", "arch.l5_2": "Self-Concept", "arch.l5_3": "Affective State", "arch.l5_4": "Values", "arch.l5_5": "Access Control", "arch.l5_6": "One-Click Export",
+    "sec.what_label": "About", "sec.what_title": "What is Castorice?",
+    "sec.what_desc": "Most agent frameworks are \"function-call orchestrators\" — give a task, call a few APIs, return a result. Castorice is different: it has an affective backdrop, a consciousness stream running behind, reflects on its actions, grows values from lived episodes. It's not a better tool — it's a companion that grows.",
+    "sec.what_foot": "MIT License · Independently developed",
+    "sec.scen_label": "Use Cases", "sec.scen_title": "What It Can Do",
+    "sec.scen_desc": "Beyond Q&A — Castorice remembers, plans, and acts on its own.",
+    "scen.s1_t": "Long-Term Companionship", "scen.s1_d": "Remembers that half-finished project you spoke about last time, your preferred tone, the decisions you're deliberating. Across sessions, days, months — it doesn't forget.",
+    "scen.s2_t": "Automation Pipelines", "scen.s2_d": "Scheduled tasks + autonomous loops + browser automation. Curates your morning brief, generates weekly retrospectives — fully unattended.",
+    "scen.s3_t": "Data Sovereignty", "scen.s3_d": "Every memory, personality trait, and episode lives in your local Personastore. One-click export, portable across machines, never locked to a cloud.",
+    "sec.start_label": "Quick Start", "sec.start_title": "Three Commands and You're In",
+    "sec.start_desc": "Pip install, Docker deploy, or build from source — pick whichever fits you.",
+    "start.s1_t": "Install", "start.s1_d": "One command installs everything. Windows users can double-click start.bat in the repo for a guided setup.",
+    "start.s2_t": "Paste Your API Key",
+    "start.s2_c1": "A config folder is generated automatically — paste your key",
+    "start.s2_c2": "CLI interactive mode", "start.s2_c3": "or start HTTP server for the frontend",
+    "start.s2_d": "Works with OpenAI / DeepSeek / OpenRouter / any custom endpoint — switch providers from the GUI.",
+    "start.s3_t": "Docker Deploy (Optional)",
+    "start.s3_c2": "or ghcr.io/li-xiao-technology/castorice-agent:latest",
+    "start.s3_d": "Images published to Docker Hub and ghcr.io — persistence + health checks out of the box.",
+    "cta.title": "The moment you start it, it begins to live.",
+    "cta.desc": "Open source, free, MIT-licensed. Runs on your machines. Your data never leaves you.",
+    "cta.btn1": "GitHub Repo", "cta.btn2": "Back to Features",
+    "foot.brand": "A self-evolving agent with inner life. MIT licensed, independently developed.",
+    "foot.nav_t": "Navigate", "foot.res_t": "Resources", "foot.about_t": "About",
+    "foot.about_d": "Castorice-Agent is a self-evolving agent framework with inner life, independently developed by Lixiao.",
+    "foot.license_slogan": "Minimum restriction, maximum freedom."
+  },
+  ja: {
+    "nav.features": "機能", "nav.capabilities": "性能", "nav.architecture": "アーキテクチャ", "nav.start": "クイックスタート",
+    "hero.title1": "内在する命を持つ", "hero.title2": "自己進化エージェント",
+    "hero.subtitle": "台本通りに演じるのではなく、自ら台本を書く。感情・意識の流れ・成長・価値観を持つAIコンパニオンフレームワーク——動かせば動かすほど、「彼自身」になっていく。",
+    "hero.btn1": "すぐに始める", "hero.btn2": "機能を見る", "hero.scroll": "↓ スクロール",
+    "stat.mem": "記憶種別", "stat.atom": "原子能力", "stat.provider": "LLMプロバイダ", "stat.sec": "セキュリティ層",
+    "sec.feat_label": "コア機能", "sec.feat_title": "ツールではない、相棒だ",
+    "sec.feat_desc": "感情はスイッチではなく下地。成長は台本ではなく創発。安全は牢獄ではなく免疫システム。",
+    "feat.f1_t": "感情システム", "feat.f1_d": "PAD 3次元感情モデルにより、気分が記憶検索・意思決定・内在的動機づけに色を添える——単なる「XXな口調で返せ」ではない。",
+    "feat.f2_t": "意識の流れ", "feat.f2_d": "前面では集中して応答、背面では思考がさまよう。閾値を超えた想念が「思わず口をつく」——気分の強さ×重要度×親密度に基づく。",
+    "feat.f3_t": "9種の記憶", "feat.f3_d": "自叙伝的・エピソード記憶・スキル・意図追跡・ナレッジカード……統合検索インタフェースが全記憶を束ね、空き時間に睡眠整理を自動実行。",
+    "feat.f4_t": "自己進化", "feat.f4_d": "すべての相互作用がエピソードとして沈殿し、リフレクションが自己概念と行動様式を書き換える。メタ認知が思考の質を監視し、学習戦略は自律的に最適化。",
+    "feat.f5_t": "価値観システム", "feat.f5_d": "Schwartz価値理論に基づく10次元が行動から徐々に形成。価値観の衝突は認知的不協和と深度リフレクションを引き起こし、動機はハードコードされず価値観から導出。",
+    "feat.f6_t": "自律行動", "feat.f6_d": "聞かれるまで待たない。応答スレッド＋自律ループスレッドの二重走行。自らフィードを閲覧し、ブロードキャストし、他エージェントと会話する。EigenFluxネットワーク対応。",
+    "sec.cap_label": "性能一覧", "sec.cap_title": "下地の実力",
+    "sec.cap_desc": "感情と人格は魂——しかし仕事は実力で決まる。サンドボックス実行からブラウザ操作、マルチモデルから防御層まで。",
+    "cap.c1_t": "実行環境",
+    "cap.c1_1t": "ローカル端末", "cap.c1_1s": "あなたのマシンで直接コマンド実行",
+    "cap.c1_2s": "セキュリティ強化済み隔離コンテナ",
+    "cap.c1_3t": "サーバー", "cap.c1_3s": "ストリーミング出力",
+    "cap.c1_4t": "デスクトップ", "cap.c1_4s": "Windows ワンクリックインストーラー",
+    "cap.c2_t": "LLMプロバイダ",
+    "cap.c2_1s": "主要モデルをネイティブ対応",
+    "cap.c2_2t": "200+ 互換モデル", "cap.c2_2s": "OpenRouter / カスタムBase URL 経由",
+    "cap.c2_3t": "カスタムAPIプロバイダ", "cap.c2_3s": "GUIから任意のOpenAI互換エンドポイントを追加",
+    "cap.c2_4s": "完全ローカルでモデル実行",
+    "cap.c3_t": "スキルシステム",
+    "cap.c3_1t": "組込みスキル", "cap.c3_1s": "ファイル・検索・分析・自動化ほか",
+    "cap.c3_2t": "スキル自動生成", "cap.c3_2s": "問題解決の過程で新スキルを自動記録",
+    "cap.c3_3t": "ネットワーク", "cap.c3_3s": "ブロードキャスト / 購読 / スキル売買",
+    "cap.c3_4t": "オープン規格", "cap.c3_4s": "移植可能なSKILL.md、どこでも共有可",
+    "cap.c4_t": "セキュリティとプライバシー",
+    "cap.c4_1t": "ゼロテレメトリ", "cap.c4_1s": "追跡なし、データ収集なし",
+    "cap.c4_2t": "コンテナ強化", "cap.c4_2s": "読取専用root、権限低下、PID制限",
+    "cap.c4_3t": "ローカルストレージ", "cap.c4_3s": "すべての記憶はあなたのマシン上のPersonastoreに",
+    "cap.c4_4t": "ライセンス", "cap.c4_4s": "完全オープンソース、全行監査可能",
+    "sec.arch_label": "アーキテクチャ", "sec.arch_title": "3層構成 + データ主権",
+    "sec.arch_desc": "知覚入力層 → 認知コア層 → 出力行動層。最下層にPersonastore人格データ主権層を配置し、4つのデータ領域が独立に読み書き・エクスポート可能。",
+    "arch.l1_t": "知覚入力層",
+    "arch.l1_1": "ユーザー対話", "arch.l1_2": "フロントエンド操作", "arch.l1_3": "エージェントネットワーク放送", "arch.l1_4": "定時イベント",
+    "arch.l2_t": "認知コア層",
+    "arch.l2_1": "感情下地", "arch.l2_2": "意識の流れ", "arch.l2_3": "思考の流れ", "arch.l2_4": "自律思考ループ", "arch.l2_5": "11の原子能力",
+    "arch.l3_t": "記憶 + 自己進化",
+    "arch.l3_1": "9種の記憶", "arch.l3_2": "内省", "arch.l3_3": "メタ認知", "arch.l3_4": "自己概念", "arch.l3_5": "生涯学習",
+    "arch.l4_t": "支援 & 防御層",
+    "arch.l4_1": "価値観", "arch.l4_2": "動機づけ", "arch.l4_3": "目標管理", "arch.l4_4": "コストゲート", "arch.l4_5": "サーキットブレーカ", "arch.l4_6": "5層セキュリティ防御",
+    "arch.l5_t": "Personastore 人格データ主権",
+    "arch.l5_1": "エピソードストリーム", "arch.l5_2": "自己概念", "arch.l5_3": "感情状態", "arch.l5_4": "価値観", "arch.l5_5": "アクセス制御", "arch.l5_6": "ワンクリック書き出し",
+    "sec.what_label": "About", "sec.what_title": "Castoriceとは？",
+    "sec.what_desc": "大半のエージェントフレームワークは「関数呼び出しオーケストレータ」——タスクを渡してAPI数本叩いて結果を返す。Castoriceは違う。感情の下地があり、背面に意識の流れが走り、自らの行動を内省し、経験から価値観が芽吹く。ただの便利ツールではない、成長する相棒だ。",
+    "sec.what_foot": "MIT License · 個人開発",
+    "sec.scen_label": "ユースケース", "sec.scen_title": "できること",
+    "sec.scen_desc": "Q&Aだけじゃない——Castoriceは記憶し、計画し、自律的に動く。",
+    "scen.s1_t": "長期の伴走", "scen.s1_d": "前回の途中のプロジェクト、好みのトーン、迷っていた意思決定——全部覚えてる。セッション・日・月をまたいで忘れない。",
+    "scen.s2_t": "自動化パイプライン", "scen.s2_d": "定時タスク＋自律ループ＋ブラウザ自動操作。毎朝の情報整理から毎週のレトロスペクティブまで——完全無人。",
+    "scen.s3_t": "データ主権", "scen.s3_d": "すべての記憶・人格・エピソードはローカルPersonastoreに。ワンクリック書き出し、マシン間移行自由、クラウドに閉じ込められない。",
+    "sec.start_label": "クイックスタート", "sec.start_title": "コマンド3行で起動",
+    "sec.start_desc": "Pipインストール、Docker、ソースビルド——あなたに合う方法をどうぞ。",
+    "start.s1_t": "インストール", "start.s1_d": "1コマンドで完了。Windowsユーザーはリポジトリのstart.batをダブルクリックでもOK。",
+    "start.s2_t": "APIキーを入力",
+    "start.s2_c1": "起動時に自動生成される設定フォルダへキーを記入",
+    "start.s2_c2": "CLI対話モード", "start.s2_c3": "またはHTTPサーバー起動（フロントエンド向け）",
+    "start.s2_d": "OpenAI / DeepSeek / OpenRouter / 任意カスタムエンドポイント対応。GUIからプロバイダ切替も一瞬。",
+    "start.s3_t": "Dockerデプロイ（任意）",
+    "start.s3_c2": "または ghcr.io/li-xiao-technology/castorice-agent:latest",
+    "start.s3_d": "Docker Hub と ghcr.io に公開済み。永続化 + ヘルスチェックも標準搭載。",
+    "cta.title": "起動した瞬間から、生き始める。",
+    "cta.desc": "オープンソース、無料、MITライセンス。あなたのマシンで動き、データはあなたから出ない。",
+    "cta.btn1": "GitHubリポジトリ", "cta.btn2": "機能に戻る",
+    "foot.brand": "内在する命を持つ自己進化エージェント。MITライセンス、個人開発。",
+    "foot.nav_t": "ナビゲーション", "foot.res_t": "リソース", "foot.about_t": "概要",
+    "foot.about_d": "Castorice-Agent は Lixiao が個人開発した、内在する命を持つ自己進化エージェントフレームワークです。",
+    "foot.license_slogan": "最小の制限、最大の自由。"
+  },
+  ko: {
+    "nav.features": "특징", "nav.capabilities": "역량", "nav.architecture": "아키텍처", "nav.start": "시작하기",
+    "hero.title1": "내면의 생명을 가진", "hero.title2": "자기진화 에이전트",
+    "hero.subtitle": "대본을 연기하는 게 아니라 스스로 대본을 쓴다. 감정과 의식의 흐름, 성장과 가치관을 갖춘 AI 동반자 프레임워크——오래 실행할수록 점점 자기 자신을 닮아간다.",
+    "hero.btn1": "빠른 시작", "hero.btn2": "특징 보기", "hero.scroll": "↓ 스크롤",
+    "stat.mem": "기억 유형", "stat.atom": "원자 능력", "stat.provider": "LLM 공급자", "stat.sec": "보안 계층",
+    "sec.feat_label": "핵심 특징", "sec.feat_title": "도구가 아닌, 동반자",
+    "sec.feat_desc": "감정은 스위치가 아니라 배경이다. 성장은 스크립트가 아니라 창발이다. 보안은 감옥이 아니라 면역 체계다.",
+    "feat.f1_t": "정서 시스템", "feat.f1_d": "PAD 3차원 정서 모델 기반. 기분 배경이 기억 검색, 의사결정 편향, 내재적 동기에 영향을 준다——단순한 \"XX 말투로 답변\"과는 다르다.",
+    "feat.f2_t": "의식의 흐름", "feat.f2_d": "전면에서는 집중하여 응답하고, 후면에서는 생각이 배회한다. 생각이 임계값을 넘으면 \"무심코 내뱉는다\"——기분 강도 × 중요도 × 친밀도 기반.",
+    "feat.f3_t": "9가지 기억", "feat.f3_d": "자서전적, 일화 흐름, 스킬, 의도 추적, 지식 카드… 통합 검색 인터페이스가 모든 기억원을 묶고, 유휴 시 수면 정리를 자동 실행.",
+    "feat.f4_t": "자기 진화", "feat.f4_d": "모든 상호작용이 일화로 쌓이고, 일화는 반성을 거쳐 자아 개념과 행동 양식을 바꾼다. 메타인지가 사고의 질을 감시하고, 학습 전략은 스스로 최적화된다.",
+    "feat.f5_t": "가치관 시스템", "feat.f5_d": "Schwartz 가치관 이론에 기반한 10차원이 행동에서 점차 형성된다. 가치관 충돌은 인지 부조화와 심층 반성을 유발하며, 동기는 하드코딩되지 않고 가치관에서 도출된다.",
+    "feat.f6_t": "자율 행동", "feat.f6_d": "물어볼 때까지 기다리지 않는다. 응답 스레드 + 자율 루프 스레드 병행. 스스로 피드를 둘러보고 방송하고 다른 에이전트와 대화한다. EigenFlux 네트워크 기본.",
+    "sec.cap_label": "역량 목록", "sec.cap_title": "밑천 실력",
+    "sec.cap_desc": "정서와 인격은 영혼이지만——일은 실력으로 한다. 샌드박스 실행부터 브라우저 자동화, 다중 모델부터 방어층까지.",
+    "cap.c1_t": "실행 환경",
+    "cap.c1_1t": "로컬 터미널", "cap.c1_1s": "네 머신에서 직접 명령 실행",
+    "cap.c1_2s": "보안 강화된 격리 컨테이너",
+    "cap.c1_3t": "서버", "cap.c1_3s": "스트리밍 출력",
+    "cap.c1_4t": "데스크톱", "cap.c1_4s": "Windows 원클릭 설치",
+    "cap.c2_t": "LLM 공급자",
+    "cap.c2_1s": "주요 모델 네이티브 연동",
+    "cap.c2_2t": "200+ 호환 모델", "cap.c2_2s": "OpenRouter / 커스텀 Base URL 경유",
+    "cap.c2_3t": "커스텀 API 공급자", "cap.c2_3s": "GUI에서 OpenAI 호환 엔드포인트 즉시 추가",
+    "cap.c2_4s": "모델 완전 로컬 실행",
+    "cap.c3_t": "스킬 시스템",
+    "cap.c3_1t": "기본 스킬", "cap.c3_1s": "파일, 검색, 분석, 자동화 등",
+    "cap.c3_2t": "스킬 자동 생성", "cap.c3_2s": "문제 풀이 과정에서 새 스킬 자동 기록",
+    "cap.c3_3t": "네트워크", "cap.c3_3s": "방송 / 구독 / 스킬 거래",
+    "cap.c3_4t": "개방 표준", "cap.c3_4s": "이식 가능한 SKILL.md, 어디서나 공유",
+    "cap.c4_t": "보안과 프라이버시",
+    "cap.c4_1t": "제로 텔레메트리", "cap.c4_1s": "추적 없음, 데이터 수집 없음",
+    "cap.c4_2t": "컨테이너 강화", "cap.c4_2s": "읽기 전용 루트, 권한 하락, PID 제한",
+    "cap.c4_3t": "로컬 스토리지", "cap.c4_3s": "모든 기억은 네 머신의 Personastore 폴더에",
+    "cap.c4_4t": "라이선스", "cap.c4_4s": "완전 오픈소스, 모든 줄 감사 가능",
+    "sec.arch_label": "아키텍처", "sec.arch_title": "3계층 구조 + 데이터 주권",
+    "sec.arch_desc": "지각 입력층 → 인지 코어층 → 출력 행동층. 최하단에 Personastore 인격 데이터 주권층이 자리하며, 4개 데이터 도메인은 독립적으로 읽기/쓰기 및 내보내기 가능.",
+    "arch.l1_t": "지각 입력층",
+    "arch.l1_1": "사용자 대화", "arch.l1_2": "프론트엔드 상호작용", "arch.l1_3": "에이전트 네트워크 방송", "arch.l1_4": "예정 이벤트",
+    "arch.l2_t": "인지 코어층",
+    "arch.l2_1": "정서 배경", "arch.l2_2": "의식의 흐름", "arch.l2_3": "사고의 흐름", "arch.l2_4": "자율 사고 루프", "arch.l2_5": "11가지 원자 능력",
+    "arch.l3_t": "기억 + 자기 진화",
+    "arch.l3_1": "9가지 기억 유형", "arch.l3_2": "반성", "arch.l3_3": "메타인지", "arch.l3_4": "자아 개념", "arch.l3_5": "평생 학습",
+    "arch.l4_t": "지원 & 방어층",
+    "arch.l4_1": "가치관", "arch.l4_2": "동기", "arch.l4_3": "목표 관리", "arch.l4_4": "비용 게이트", "arch.l4_5": "회로 차단기", "arch.l4_6": "5계층 보안 방어",
+    "arch.l5_t": "Personastore — 인격 데이터 주권",
+    "arch.l5_1": "일화 흐름", "arch.l5_2": "자아 개념", "arch.l5_3": "정서 상태", "arch.l5_4": "가치관", "arch.l5_5": "접근 제어", "arch.l5_6": "원클릭 내보내기",
+    "sec.what_label": "소개", "sec.what_title": "Castorice 란?",
+    "sec.what_desc": "대부분의 에이전트 프레임워크는 \"함수 호출 오케스트레이터\"다——작업 주고 API 몇 개 호출해서 결과 돌려준다. Castorice는 다르다: 정서 배경이 있고, 뒤에서 의식의 흐름이 돌고, 스스로 행동을 반성하며, 경험에서 가치관이 자란다. 그냥 좋은 도구가 아니라, 성장하는 동반자다.",
+    "sec.what_foot": "MIT License · 개인 개발",
+    "sec.scen_label": "유스 케이스", "sec.scen_title": "할 수 있는 일",
+    "sec.scen_desc": "질의응답 이상이다——Castorice는 기억하고, 계획하고, 스스로 행동한다.",
+    "scen.s1_t": "장기 동반", "scen.s1_d": "지난번에 하다 만 프로젝트, 선호하는 말투, 고민하던 결정까지 다 기억한다. 세션·날짜·월을 넘나들며 잊지 않는다.",
+    "scen.s2_t": "자동화 파이프라인", "scen.s2_d": "예정 작업 + 자율 루프 + 브라우저 자동화. 매일 아침 정보 정리부터 매주 회고까지——전부 무인으로.",
+    "scen.s3_t": "데이터 주권", "scen.s3_d": "모든 기억·인격·일화는 로컬 Personastore에. 원클릭 내보내기, 기기 이전 자유, 클라우드에 잠기지 않는다.",
+    "sec.start_label": "빠른 시작", "sec.start_title": "세 줄로 바로 시작",
+    "sec.start_desc": "Pip 설치, Docker 배포, 소스 빌드——골라서 쓰자.",
+    "start.s1_t": "설치", "start.s1_d": "한 줄로 끝. Windows 사용자는 저장소 start.bat 더블클릭해도 된다.",
+    "start.s2_t": "API Key 붙여넣기",
+    "start.s2_c1": "기동 시 자동 생성되는 설정 폴더에 Key 기입",
+    "start.s2_c2": "CLI 대화 모드", "start.s2_c3": "또는 HTTP 서버 시작 (프론트엔드용)",
+    "start.s2_d": "OpenAI / DeepSeek / OpenRouter / 임의 커스텀 엔드포인트 대응. GUI에서 공급자 전환도 순식간.",
+    "start.s3_t": "Docker 배포 (옵션)",
+    "start.s3_c2": "또는 ghcr.io/li-xiao-technology/castorice-agent:latest",
+    "start.s3_d": "Docker Hub 와 ghcr.io 에 이미지 공개. 영속화 + 상태 체크 기본 탑재.",
+    "cta.title": "시작한 순간부터, 살아나기 시작한다.",
+    "cta.desc": "오픈소스, 무료, MIT 라이선스. 네 머신에서 돌고, 네 데이터는 네 곁을 떠나지 않는다.",
+    "cta.btn1": "GitHub 리포지토리", "cta.btn2": "특징으로 돌아가기",
+    "foot.brand": "내면의 생명을 가진 자기진화 에이전트. MIT 라이선스, 개인 개발.",
+    "foot.nav_t": "둘러보기", "foot.res_t": "리소스", "foot.about_t": "소개",
+    "foot.about_d": "Castorice-Agent는 Lixiao가 개인 개발한, 내면의 생명을 가진 자기진화 에이전트 프레임워크입니다.",
+    "foot.license_slogan": "최소의 제한, 최대의 자유."
+  }
+};
+
+function applyLang(lang) {
+  var dict = I18N[lang] || I18N.zh;
+  document.querySelectorAll('[data-i18n]').forEach(function(el) {
+    var key = el.getAttribute('data-i18n');
+    if (dict[key] != null) el.textContent = dict[key];
+  });
+  document.documentElement.setAttribute('lang', lang);
+  try { localStorage.setItem('castorice.lang', lang); } catch(e) {}
+  var sel = document.getElementById('langSelect');
+  if (sel && sel.value !== lang) sel.value = lang;
+}
+(function initLang() {
+  var saved = null;
+  try { saved = localStorage.getItem('castorice.lang'); } catch(e) {}
+  var init = saved || (navigator.language || 'zh').slice(0, 2);
+  if (!I18N[init]) init = 'zh';
+  applyLang(init);
+  document.addEventListener('change', function(e) {
+    if (e.target && e.target.id === 'langSelect') applyLang(e.target.value);
   });
 })();
 </script>
