@@ -1,6 +1,6 @@
 [project]
 name = "castorice-agent"
-version = "3.3.0"
+version = "3.3.1"
 description = "自主进化的 AI Agent 框架 - 人格数据主权 + 情感底色 + 元反射性学习 + 自主思考循环，零 LangGraph 依赖"
 authors = [{ name = "Lixiao" }]
 readme = "README.md"
@@ -116,6 +116,10 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["castorice"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"castorice/data/default_config.yaml" = "castorice/data/default_config.yaml"
+"castorice/data/default.env.example" = "castorice/data/default.env.example"
 
 [tool.uv]
 # uv 包管理器专属配置

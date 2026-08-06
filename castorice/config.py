@@ -2,8 +2,9 @@
 配置加载模块（统一从 .env + yaml 读取）
 
 职责：
-- 加载 .env 环境变量（API 密钥）
-- 加载 castorice_config.yaml 业务配置
+- 加载 .env 环境变量（API 密钥）——搜索顺序：CWD → ~/.castorice → 源码根目录（向后兼容）
+- 加载 castorice_config.yaml 业务配置——搜索顺序：CWD → ~/.castorice → 内嵌默认（castorice/data/default_config.yaml）
+- 缺失时从内嵌默认写出到用户目录，保证首次 pip 安装即可启动
 - 提供类型安全的配置访问接口
 """
 
@@ -11,6 +12,7 @@ import logging
 import os
 import sys
 import threading
+import shutil
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -18,40 +20,250 @@ import yaml
 from dotenv import load_dotenv
 
 
-# 项目根目录
+# 源码根目录（git clone / pip install -e 时指向项目根；非 editable pip 安装时指向 site-packages）
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 
+# 嵌入式默认配置（随 pip 包分发）
+_PACKAGE_DATA_DIR = Path(__file__).parent / "data"
+DEFAULT_CONFIG_PATH = _PACKAGE_DATA_DIR / "default_config.yaml"
+DEFAULT_ENV_EXAMPLE_PATH = _PACKAGE_DATA_DIR / "default.env.example"
+
+# 用户级配置目录
+USER_CONFIG_DIR = Path.home() / ".castorice"
+
+
+# ============================================================
+# 搜索 + 自动写出工具
+# ============================================================
+
+def _cwd() -> Path:
+    """返回当前工作目录。抽出来便于测试打桩。"""
+    return Path.cwd()
+
+
+def _find_env_file() -> Optional[Path]:
+    """搜索 .env 文件，按优先级返回第一个存在的路径；找不到返回 None。
+
+    优先级：
+    1. CWD/.env
+    2. ~/.castorice/.env
+    3. PROJECT_ROOT/.env  （源码 / editable 安装的老位置，向后兼容）
+    """
+    candidates = [
+        _cwd() / ".env",
+        USER_CONFIG_DIR / ".env",
+        PROJECT_ROOT / ".env",
+    ]
+    for p in candidates:
+        if p.is_file():
+            return p
+    return None
+
+
+def _find_config_yaml(explicit: Optional[str] = None) -> Optional[Path]:
+    """搜索 castorice_config.yaml（或用户显式指定路径）。
+
+    显式路径不为空时，只按那个路径去找（不存在即返回 None，不做回退写出）。
+    否则按：
+    1. CWD/castorice_config.yaml
+    2. ~/.castorice/config.yaml
+    3. PROJECT_ROOT/castorice_config.yaml  （源码 / editable 向后兼容）
+    """
+    if explicit is not None:
+        p = Path(explicit)
+        return p if p.is_file() else None
+
+    candidates = [
+        _cwd() / "castorice_config.yaml",
+        USER_CONFIG_DIR / "config.yaml",
+        PROJECT_ROOT / "castorice_config.yaml",
+    ]
+    for p in candidates:
+        if p.is_file():
+            return p
+    return None
+
+
+def _ensure_user_writable_config() -> Path:
+    """确保用户目录有一份可写配置并返回其路径。
+
+    搜索顺序下若已有用户配置，直接返回路径。
+    否则：
+      - 优先把嵌入式默认复制到 CWD/castorice_config.yaml（最直观）
+      - CWD 不可写时回退到 ~/.castorice/config.yaml
+    同时复制 .env.example 到同目录（如果同目录没有 .env 也没有 .env.example）。
+
+    该函数永远返回一个可直接读取的配置文件路径。
+    """
+    found = _find_config_yaml()
+    if found is not None:
+        return found
+
+    # 没找到：从嵌入式默认写出
+    if not DEFAULT_CONFIG_PATH.is_file():
+        # 极端情况：嵌入式默认也缺失——再退一步，尝试源码根目录
+        fallback = PROJECT_ROOT / "castorice_config.yaml"
+        if fallback.is_file():
+            source = fallback
+        else:
+            raise FileNotFoundError(
+                "未找到 castorice_config.yaml，且内嵌默认缺失。"
+                "请重新安装 castorice-agent 包。"
+            )
+    else:
+        source = DEFAULT_CONFIG_PATH
+
+    # 优先写到 CWD
+    target_cwd = _cwd() / "castorice_config.yaml"
+    target_user = USER_CONFIG_DIR / "config.yaml"
+    target = None
+    try:
+        target_cwd.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target_cwd)
+        target = target_cwd
+    except (OSError, PermissionError):
+        USER_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target_user)
+        target = target_user
+
+    # 顺手把 .env.example 放到同目录（如果同目录还没有 .env 和 .env.example）
+    target_dir = target.parent
+    if not (target_dir / ".env").exists() and not (target_dir / ".env.example").exists():
+        try:
+            env_src = DEFAULT_ENV_EXAMPLE_PATH
+            if env_src.is_file():
+                shutil.copy2(env_src, target_dir / ".env.example")
+        except (OSError, PermissionError):
+            pass
+
+    print(f"[Castorice] 首次启动，已生成默认配置: {target}")
+    print(f"[Castorice] 如需自定义，请编辑该文件或复制 {target_dir}/.env.example 为 .env 填入 API Key")
+    return target
+
+
+def _ensure_data_dirs() -> None:
+    """尽早创建 castorice_data/ 目录，避免下游 SQLite/JSON 存储因父目录缺失失败。
+
+    相对路径会落在 CWD，符合默认 yaml 中 ./castorice_data/... 的约定。
+    """
+    candidates = [
+        _cwd() / "castorice_data",
+        Path("./castorice_data").resolve(),
+    ]
+    seen = set()
+    for p in candidates:
+        ap = p.resolve() if not p.is_absolute() else p
+        if str(ap) in seen:
+            continue
+        seen.add(str(ap))
+        try:
+            ap.mkdir(parents=True, exist_ok=True)
+        except (OSError, PermissionError):
+            pass
+
+
+# ============================================================
+# 加载器
+# ============================================================
 
 def _load_dotenv() -> None:
-    """加载 .env 环境变量"""
-    env_path = PROJECT_ROOT / ".env"
-    if env_path.exists():
-        load_dotenv(env_path)
-    else:
-        # 尝试加载 .env.example 给出友好提示
-        example = PROJECT_ROOT / ".env.example"
-        if example.exists():
-            print(f"[提示] 未找到 .env 文件，请复制 .env.example 为 .env 并填入 API 密钥")
-        load_dotenv()  # 即便不存在也调用一次，让框架按环境变量查找
+    """加载 .env 环境变量（搜索多路径，全部加载以保证最宽覆盖）。
+
+    顺序是低优先级先加载，高优先级后加载——后者覆盖前者（dotenv 默认 override=False，但我们显式走一遍所有存在的文件以兼容老结构）。
+    实际行为：dotenv 默认不覆盖已存在的同名环境变量，因此用户通过 `export VAR=xxx` 设置的变量优先级最高。
+    """
+    candidates = [
+        PROJECT_ROOT / ".env",       # 最低优先级：源码根
+        USER_CONFIG_DIR / ".env",    # 中优先级：用户目录
+        _cwd() / ".env",             # 最高优先级：当前目录
+    ]
+    loaded_any = False
+    for p in candidates:
+        if p.is_file():
+            load_dotenv(p, override=False)
+            loaded_any = True
+
+    if not loaded_any:
+        # 没有任何 .env 也没关系：尝试给出提示，然后调用 load_dotenv() 走系统环境变量
+        env_example_hint = _cwd() / ".env.example"
+        if env_example_hint.is_file() or (USER_CONFIG_DIR / ".env.example").is_file():
+            print(
+                "[Castorice] 未找到 .env 文件，请复制同目录下 .env.example 为 .env 并填入 API Key；"
+                "或直接通过系统环境变量设置。"
+            )
+        load_dotenv()  # 即便没有文件，也兜底调用一次，保证系统级 env 正常传入
 
 
 def _load_yaml_config(config_path: Optional[str] = None) -> Dict[str, Any]:
-    """加载 YAML 业务配置"""
-    if config_path is None:
-        config_path = PROJECT_ROOT / "castorice_config.yaml"
+    """加载 YAML 业务配置。
+
+    如果显式传了 config_path 但不存在：抛 FileNotFoundError（用户写错路径不该静默回退）。
+    否则使用 _ensure_user_writable_config() 得到实际路径，保证一定可读。
+    """
+    if config_path is not None:
+        path = Path(config_path)
+        if not path.is_file():
+            raise FileNotFoundError(f"配置文件不存在: {path}")
     else:
-        config_path = Path(config_path)
+        path = _ensure_user_writable_config()
 
-    if not config_path.exists():
-        raise FileNotFoundError(f"配置文件不存在: {config_path}")
-
-    with open(config_path, "r", encoding="utf-8") as f:
+    with open(path, "r", encoding="utf-8") as f:
         config_dict = yaml.safe_load(f) or {}
 
     return validate_config(config_dict)
 
 
-# ========== 配置校验（pydantic） ==========
+# ============================================================
+# AttrDict —— 支持 cfg.agent.name 形式的嵌套属性访问
+# ============================================================
+
+class AttrDict:
+    """把 dict 递归包成对象式访问（仍然是 dict 子类行为不保留，仅提供 .attr 语法糖）。
+
+    读取时像对象：cfg.agent.name
+    写入时仍当 dict：cfg.raw()['agent']['name'] = '...'
+    这样既满足文档承诺的 .attr 链式访问，又不破坏下游的 dict isinstance 行为。
+    """
+
+    __slots__ = ("_data",)
+
+    def __init__(self, data: Dict[str, Any]):
+        object.__setattr__(self, "_data", data)
+
+    def __getattr__(self, key: str) -> Any:
+        if key.startswith("_"):
+            raise AttributeError(key)
+        if key not in self._data:
+            raise AttributeError(f"配置中不存在该属性: {key}")
+        val = self._data[key]
+        if isinstance(val, dict):
+            return AttrDict(val)
+        if isinstance(val, list):
+            return [AttrDict(v) if isinstance(v, dict) else v for v in val]
+        return val
+
+    def __repr__(self) -> str:
+        return f"AttrDict({self._data!r})"
+
+    def keys(self):
+        return self._data.keys()
+
+    def __iter__(self):
+        return iter(self._data)
+
+    def __len__(self):
+        return len(self._data)
+
+    def get(self, key, default=None):
+        return self._data.get(key, default)
+
+    def __contains__(self, key):
+        return key in self._data
+
+
+# ============================================================
+# 配置校验
+# ============================================================
 
 # 支持的 LLM 供应商列表
 _SUPPORTED_LLM_PROVIDERS = {
@@ -77,13 +289,17 @@ def validate_config(config_dict: Dict[str, Any]) -> Dict[str, Any]:
         return validate_config_dict(config_dict)
     except ImportError:
         try:
-            from pydantic import BaseModel, Field, field_validator, model_validator
+            from pydantic import BaseModel, Field, field_validator, model_validator  # noqa: F401
         except ImportError:
             return config_dict
 
     # pydantic 可用但 config_schema 不可达时的兜底（极罕见）
     return config_dict
 
+
+# ============================================================
+# Config 主类
+# ============================================================
 
 class Config:
     """
@@ -97,17 +313,20 @@ class Config:
     """
 
     def __init__(self, config_path: Optional[str] = None):
+        # 先建数据目录，避免后续存储组件因父目录不存在报错
+        _ensure_data_dirs()
         _load_dotenv()
-        self._config_path = config_path
+        self._config_path_override = config_path
         self._yaml = _load_yaml_config(config_path)
+        self._actual_path: Path = _ensure_user_writable_config() if config_path is None else Path(config_path)
         self._build_llm_config()
         self._build_qq_bot_config()
-        self._validate_api_keys()  # P1-29: 启动校验 API Key
+        self._validate_api_keys()
         self._last_modified = self._get_config_mtime()
 
     def _validate_api_keys(self) -> None:
         """
-        P1-29: 校验当前 provider 的 API Key 是否已配置。
+        校验当前 provider 的 API Key 是否已配置。
 
         仅警告不抛异常，允许无 Key 启动（如使用 ollama 本地模型）。
         """
@@ -131,17 +350,13 @@ class Config:
             api_key = section_cfg.get(key_field, "") if isinstance(section_cfg, dict) else ""
             if not api_key:
                 logger.warning(
-                    f"P1-29: LLM provider '{provider}' 的 API Key 未配置 "
+                    f"LLM provider '{provider}' 的 API Key 未配置 "
                     f"(环境变量 {env_var})，相关功能将不可用"
                 )
 
     def _get_config_mtime(self) -> float:
         """获取配置文件最后修改时间"""
-        if self._config_path:
-            path = Path(self._config_path)
-        else:
-            path = PROJECT_ROOT / "castorice_config.yaml"
-        return path.stat().st_mtime if path.exists() else 0
+        return self._actual_path.stat().st_mtime if self._actual_path.exists() else 0
 
     def check_for_updates(self) -> bool:
         """检查配置文件是否有更新"""
@@ -154,7 +369,7 @@ class Config:
         """重新加载配置（热更新）"""
         try:
             _load_dotenv()
-            self._yaml = _load_yaml_config(self._config_path)
+            self._yaml = _load_yaml_config(self._config_path_override)
             self._build_llm_config()
             self._build_qq_bot_config()
             self._last_modified = self._get_config_mtime()
@@ -197,7 +412,7 @@ class Config:
             "openrouter": {
                 "api_key": os.getenv("OPENROUTER_API_KEY", ""),
                 "base_url": os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
-                "model": os.getenv("OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet"),
+                "model": os.getenv("OPENROUTER_MODEL", "anthropic/claude-3-5-sonnet"),
             },
             "gemini": {
                 "api_key": os.getenv("GEMINI_API_KEY", ""),
@@ -276,12 +491,17 @@ class Config:
         """
         支持 cfg.agent.name / cfg.memory.short_term 等链式访问。
         注意：以 _ 开头的属性走默认查找，不查 _yaml。
+        dict/list 会被 AttrDict 递归包装以支持 .attr 链式访问。
         """
         if key.startswith("_"):
             raise AttributeError(key)
         val = self._yaml.get(key)
         if val is None:
             raise AttributeError(f"配置中不存在该属性: {key}")
+        if isinstance(val, dict):
+            return AttrDict(val)
+        if isinstance(val, list):
+            return [AttrDict(v) if isinstance(v, dict) else v for v in val]
         return val
 
     def raw(self) -> Dict[str, Any]:

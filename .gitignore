@@ -65,3 +65,7 @@ backup_*/**
 
 # Model cache
 .cache/
+
+# Temp / one-off files
+repo_update.json
+docs/social-preview.jpg
