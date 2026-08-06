@@ -59,6 +59,8 @@ jobs:
           ghcr.io/${{ env.OWNER_LC }}/${{ env.IMAGE_NAME }}:latest
           docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
           docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
 
     - name: 创建 Docker Hub Deployment 记录
       env:
