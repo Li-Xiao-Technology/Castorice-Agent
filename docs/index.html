@@ -639,8 +639,8 @@ footer .footer-logo {
 <!-- Quick Start -->
 <section id="start">
   <div class="section-label reveal">快速开始</div>
-  <h2 class="section-title reveal">三分钟启动</h2>
-  <p class="section-desc reveal">Pip 一键安装，或下载源码运行。</p>
+  <h2 class="section-title reveal">五种启动方式</h2>
+  <p class="section-desc reveal">从 Pip 一键安装到 Docker 集群部署，覆盖所有使用场景。</p>
   <div class="features-grid">
     <div class="feature-card reveal">
       <div class="feature-num">01</div>
@@ -667,6 +667,28 @@ footer .footer-logo {
 cd Castorice-Agent
 pip install -e ".[http]"
 python -m castorice.main --mode http</div>
+    </div>
+    <div class="feature-card reveal">
+      <div class="feature-num">04</div>
+      <div class="feature-icon">🐳</div>
+      <h3 class="feature-title">Docker 镜像</h3>
+      <p class="feature-desc" style="margin-bottom: 1rem;">已发布到 Docker Hub 和 ghcr.io，一行命令拉取并启动。</p>
+      <div class="code-block" style="margin-bottom: 0.8rem;">docker pull lixiaolive/castorice-agent:latest</div>
+      <div class="code-block" style="font-size: 0.78rem;">docker pull ghcr.io/li-xiao-technology/castorice-agent:latest</div>
+      <div class="code-block" style="margin-top: 0.8rem; font-size: 0.78rem;">docker run -d --name castorice-agent \
+  -p 5477:5477 \
+  -v ./castorice_data:/app/castorice_data \
+  --env-file .env \
+  lixiaolive/castorice-agent:latest</div>
+    </div>
+    <div class="feature-card reveal">
+      <div class="feature-num">05</div>
+      <div class="feature-icon">🗄️</div>
+      <h3 class="feature-title">Docker Compose</h3>
+      <p class="feature-desc" style="margin-bottom: 1rem;">仓库根目录自带 docker-compose.yml，数据持久化 + 健康检查。</p>
+      <div class="code-block">cp .env.example .env
+# 编辑 .env 填入 API Key
+docker compose up -d</div>
     </div>
   </div>
   <div style="margin-top: 2rem;">

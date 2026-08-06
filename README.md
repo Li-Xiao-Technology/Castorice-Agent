@@ -553,6 +553,49 @@ npm run dev
 
 ---
 
+### 🐳 方式四：Docker 镜像
+
+Docker Hub：
+```bash
+docker pull lixiaolive/castorice-agent:latest
+docker run -d \
+  --name castorice-agent \
+  -p 5477:5477 \
+  -v ./castorice_data:/app/castorice_data \
+  --env-file .env \
+  lixiaolive/castorice-agent:latest
+```
+
+GitHub Container Registry（ghcr.io）：
+```bash
+docker pull ghcr.io/li-xiao-technology/castorice-agent:latest
+docker run -d \
+  --name castorice-agent \
+  -p 5477:5477 \
+  -v ./castorice_data:/app/castorice_data \
+  --env-file .env \
+  ghcr.io/li-xiao-technology/castorice-agent:latest
+```
+
+启动后 HTTP API 运行在 `http://localhost:5477`。
+
+---
+
+### 🗄️ 方式五：Docker Compose
+
+```bash
+# 准备环境变量
+cp .env.example .env
+# 编辑 .env，填入你的 LLM API 密钥
+
+# 直接启动
+docker compose up -d
+```
+
+数据目录挂载到 `./castorice_data`，健康检查自动监控服务状态。
+
+---
+
 ## 十三、配置说明
 
 ### `.env` —— API 密钥
