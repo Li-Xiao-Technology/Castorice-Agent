@@ -495,11 +495,33 @@ Castorice Agent/
 
 ## 十二、快速开始
 
-### Windows 用户：双击 `start.bat`
+### ⚡ 方式一：Pip 安装（推荐，最快）
+
+```bash
+pip install castorice-agent[http]
+```
+
+启动命令行交互模式：
+```bash
+castorice
+```
+
+启动 HTTP API 服务（配合前端或外部程序调用）：
+```bash
+castorice --mode http
+```
+
+启动后会自动生成配置目录，填入 API Key 即可使用。
+
+---
+
+### 🪟 方式二：Windows 一键启动：双击 `start.bat`
 
 脚本自动完成：检测 Python → 创建虚拟环境 → 安装依赖 → 检测 `.env` → 启动 HTTP 服务。
 
-### 手动安装
+---
+
+### 📦 方式三：源码手动安装
 
 ```bash
 # 1. 克隆并进入目录

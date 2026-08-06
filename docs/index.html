@@ -640,15 +640,29 @@ footer .footer-logo {
 <section id="start">
   <div class="section-label reveal">快速开始</div>
   <h2 class="section-title reveal">三分钟启动</h2>
-  <p class="section-desc reveal">Windows 用户双击即用，或手动安装。</p>
-  <div class="start-grid">
-    <div class="start-card reveal">
-      <h3>🪟 Windows 一键启动</h3>
-      <p style="color: var(--fg-dim); font-size: 0.9rem; margin-bottom: 1rem;">双击 start.bat，脚本自动完成一切。</p>
+  <p class="section-desc reveal">Pip 一键安装，或下载源码运行。</p>
+  <div class="features-grid">
+    <div class="feature-card reveal">
+      <div class="feature-num">01</div>
+      <div class="feature-icon">⚡</div>
+      <h3 class="feature-title">Pip 安装（推荐）</h3>
+      <p class="feature-desc" style="margin-bottom: 1rem;">最快的方式，一键安装到本地环境。</p>
+      <div class="code-block" style="margin-bottom: 0.8rem;">pip install castorice-agent[http]</div>
+      <div class="code-block" style="font-size: 0.78rem; color: var(--accent-3); margin-bottom: 0.8rem;">castorice            # 命令行交互</div>
+      <div class="code-block" style="font-size: 0.78rem;">castorice --mode http  # HTTP API 服务</div>
+    </div>
+    <div class="feature-card reveal">
+      <div class="feature-num">02</div>
+      <div class="feature-icon">🪟</div>
+      <h3 class="feature-title">Windows 一键启动</h3>
+      <p class="feature-desc" style="margin-bottom: 1rem;">双击 start.bat，脚本自动完成环境检测、虚拟环境创建和服务启动。</p>
       <div class="code-block">双击 start.bat</div>
     </div>
-    <div class="start-card reveal">
-      <h3>📦 手动安装</h3>
+    <div class="feature-card reveal">
+      <div class="feature-num">03</div>
+      <div class="feature-icon">📦</div>
+      <h3 class="feature-title">源码手动安装</h3>
+      <p class="feature-desc" style="margin-bottom: 1rem;">从 GitHub 克隆源码，适合想二次开发的用户。</p>
       <div class="code-block">git clone https://github.com/Li-Xiao-Technology/Castorice-Agent.git
 cd Castorice-Agent
 pip install -e ".[http]"
