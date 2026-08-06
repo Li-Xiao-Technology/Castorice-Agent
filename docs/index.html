@@ -417,44 +417,24 @@ section {
   overflow-x: auto;
   overflow-y: auto;
   white-space: pre;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(139, 92, 246, 0.4) #050309;
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }
-
 .code-block::-webkit-scrollbar {
-  height: 8px;
-  width: 8px;
-}
-.code-block::-webkit-scrollbar-track {
-  background: #050309;
-  border-radius: 0 0 10px 10px;
-}
-.code-block::-webkit-scrollbar-thumb {
-  background: rgba(139, 92, 246, 0.4);
-  border-radius: 4px;
-}
-.code-block::-webkit-scrollbar-thumb:hover {
-  background: rgba(139, 92, 246, 0.7);
+  display: none;
+  width: 0;
+  height: 0;
 }
 
-/* Global scrollbar for whole page */
+/* Hide all scrollbars globally */
 * {
-  scrollbar-width: thin;
-  scrollbar-color: rgba(139, 92, 246, 0.3) var(--bg);
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }
 *::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-}
-*::-webkit-scrollbar-track {
-  background: var(--bg);
-}
-*::-webkit-scrollbar-thumb {
-  background: rgba(139, 92, 246, 0.3);
-  border-radius: 5px;
-}
-*::-webkit-scrollbar-thumb:hover {
-  background: rgba(139, 92, 246, 0.6);
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 /* Footer */
