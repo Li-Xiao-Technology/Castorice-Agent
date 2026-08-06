@@ -75,8 +75,8 @@ nav {
   top: 0; left: 0; right: 0;
   z-index: 100;
   padding: 1rem 2rem;
-  display: flex;
-  justify-content: center;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
   align-items: center;
   backdrop-filter: blur(12px);
   background: rgba(10, 7, 18, 0.7);
@@ -84,10 +84,15 @@ nav {
 }
 
 .nav-logo {
-  display: none;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Noto Sans SC', sans-serif;
+  font-weight: 800;
+  font-size: 1.25rem;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+  justify-self: start;
 }
 
-.nav-links { display: flex; gap: 2rem; align-items: center; }
+.nav-links { display: flex; gap: 2rem; align-items: center; justify-self: center; }
 
 .nav-links a {
   color: var(--fg-dim);
