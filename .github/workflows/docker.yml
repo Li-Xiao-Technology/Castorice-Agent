@@ -15,7 +15,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-      deployments: write
 
     steps:
     - uses: actions/checkout@v4
@@ -42,6 +41,7 @@ jobs:
         password: ${{ secrets.GITHUB_TOKEN }}
 
     - name: 登录 Docker Hub
+      if: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
       uses: docker/login-action@v3
       with:
         registry: docker.io
@@ -57,30 +57,15 @@ jobs:
         tags: |
           ghcr.io/${{ env.OWNER_LC }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
           ghcr.io/${{ env.OWNER_LC }}/${{ env.IMAGE_NAME }}:latest
-          docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
-          docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-
-    - name: 创建 Docker Hub Deployment 记录
-      continue-on-error: true
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        DEPLOYMENT_ID=$(gh api repos/${{ github.repository }}/deployments \
-          -f ref="${{ github.sha }}" \
-          -f environment="docker-hub" \
-          -f description="Docker Hub: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}" \
-          --jq '.id')
-        gh api repos/${{ github.repository }}/deployments/$DEPLOYMENT_ID/statuses \
-          -f state="success" \
-          -f description="Image pushed to Docker Hub" \
-          -f environment_url="https://hub.docker.com/r/${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}"
+          ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' && format('docker.io/{0}/{1}:{2}', secrets.DOCKERHUB_USERNAME, env.IMAGE_NAME, steps.meta.outputs.version) || '' }}
+          ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' && format('docker.io/{0}/{1}:latest', secrets.DOCKERHUB_USERNAME, env.IMAGE_NAME) || '' }}
 
     - name: 输出拉取命令
       run: |
         echo "✅ 镜像构建成功！"
         echo "📦 ghcr.io 拉取："
         echo "   docker pull ghcr.io/${{ env.OWNER_LC }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}"
-        echo "📦 Docker Hub 拉取："
-        echo "   docker pull ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}"
+        if [ -n "${{ secrets.DOCKERHUB_USERNAME }}" ]; then
+          echo "📦 Docker Hub 拉取："
+          echo "   docker pull ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}"
+        fi

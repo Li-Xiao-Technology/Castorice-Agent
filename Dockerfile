@@ -12,14 +12,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# 先复制依赖定义和完整包结构，利用 Docker 层缓存
-COPY pyproject.toml README.md ./
-COPY castorice ./castorice
+# 复制全部源码（.dockerignore 已排除前端/数据/缓存/venv等）
+COPY . .
 
 RUN pip install --no-cache-dir .
-
-# 再复制剩余文件（如 .dockerignore 排除的文件，不触发重新安装依赖）
-COPY . .
 
 EXPOSE 5477
 
