@@ -323,6 +323,18 @@ section {
   border: 1px solid var(--border);
 }
 
+/* Large icon box (hermes-style colored square icon) */
+.feature-icon-lg {
+  width: 56px; height: 56px;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.6rem;
+  margin-bottom: 1.4rem;
+  border: 1px solid var(--border);
+}
+
 .feature-title {
   font-family: 'Noto Serif SC', serif;
   font-weight: 700;
@@ -334,6 +346,88 @@ section {
   color: var(--fg-dim);
   font-size: 0.95rem;
   line-height: 1.6;
+}
+
+/* Capability / spec cards (checkmark list style, 4 per grid) */
+.spec-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1.5rem;
+  margin-top: 3rem;
+}
+
+.spec-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 2rem;
+  backdrop-filter: blur(10px);
+  transition: all 0.4s;
+}
+
+.spec-card:hover {
+  transform: translateY(-3px);
+  border-color: rgba(139, 92, 246, 0.3);
+}
+
+.spec-header {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  margin-bottom: 1.5rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.spec-icon {
+  width: 40px; height: 40px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.2rem;
+  background: rgba(139, 92, 246, 0.12);
+  border: 1px solid var(--border);
+}
+
+.spec-title {
+  font-family: 'Noto Serif SC', serif;
+  font-weight: 700;
+  font-size: 1.1rem;
+}
+
+.spec-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 0.9rem 0;
+  border-bottom: 1px dashed rgba(139, 92, 246, 0.08);
+  gap: 1rem;
+}
+
+.spec-item:last-child { border-bottom: none; }
+
+.spec-item-left { min-width: 0; }
+
+.spec-item-title {
+  font-weight: 500;
+  font-size: 0.95rem;
+  color: var(--fg);
+}
+
+.spec-item-sub {
+  font-size: 0.82rem;
+  color: var(--fg-dim);
+  margin-top: 0.15rem;
+  line-height: 1.5;
+}
+
+.spec-check {
+  color: var(--accent-2);
+  font-weight: 700;
+  font-family: 'Space Mono', monospace;
+  flex-shrink: 0;
+  font-size: 0.9rem;
 }
 
 /* Architecture */
@@ -384,12 +478,139 @@ section {
   gap: 1.5rem;
 }
 
+/* Step timeline (Hermes-style numbered steps) */
+.steps-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+  margin-top: 3rem;
+}
+
+.step {
+  display: grid;
+  grid-template-columns: 72px 1fr;
+  gap: 1.5rem;
+  align-items: flex-start;
+}
+
+.step-num {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent), var(--accent-3));
+  color: white;
+  font-family: 'Space Mono', monospace;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.05rem;
+  flex-shrink: 0;
+  box-shadow: 0 4px 20px rgba(139, 92, 246, 0.25);
+}
+
+.step-content .code-block {
+  margin-top: 1rem;
+  margin-bottom: 1rem;
+}
+
+.step-title {
+  font-family: 'Noto Serif SC', serif;
+  font-weight: 700;
+  font-size: 1.2rem;
+  margin-bottom: 0.6rem;
+}
+
+.step-desc {
+  color: var(--fg-dim);
+  font-size: 0.95rem;
+  line-height: 1.65;
+}
+
+/* CTA banner */
+.cta-banner {
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.12), rgba(6, 182, 212, 0.08));
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 4rem 2rem;
+  text-align: center;
+  backdrop-filter: blur(10px);
+  position: relative;
+  z-index: 1;
+  max-width: 1200px;
+  margin: 4rem auto;
+}
+
+.cta-banner h2 {
+  font-family: 'Noto Serif SC', serif;
+  font-weight: 700;
+  font-size: clamp(1.8rem, 4vw, 2.5rem);
+  margin-bottom: 0.8rem;
+}
+
+.cta-banner p {
+  color: var(--fg-dim);
+  font-size: 1.05rem;
+  max-width: 620px;
+  margin: 0 auto 2rem;
+}
+
+/* Footer - 3 column layout */
+.footer-wrap {
+  max-width: 1200px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 1.5fr 1fr 1fr 1fr;
+  gap: 2rem;
+  text-align: left;
+  padding: 0 2rem;
+}
+
+.footer-col h4 {
+  font-family: 'Noto Serif SC', serif;
+  font-size: 1rem;
+  font-weight: 700;
+  margin-bottom: 1rem;
+  color: var(--fg);
+}
+
+.footer-col ul {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.footer-col a {
+  color: var(--fg-dim);
+  text-decoration: none;
+  font-size: 0.9rem;
+  transition: color 0.3s;
+}
+
+.footer-col a:hover { color: var(--fg); }
+
+.footer-bottom {
+  border-top: 1px solid var(--border);
+  padding-top: 2rem;
+  margin-top: 3rem;
+  color: var(--fg-dim);
+  font-size: 0.85rem;
+}
+
 @media (max-width: 768px) {
   .start-grid { grid-template-columns: 1fr; }
   .hero-stats { gap: 1.5rem; }
   nav { padding: 0.8rem 1rem; }
   .nav-links { gap: 1rem; }
   .nav-links a:not(.nav-cta) { display: none; }
+  .footer-wrap { grid-template-columns: 1fr 1fr; }
+  .step { grid-template-columns: 56px 1fr; gap: 1rem; }
+  .step-num { width: 40px; height: 40px; font-size: 0.9rem; }
+}
+
+@media (max-width: 480px) {
+  .footer-wrap { grid-template-columns: 1fr; }
 }
 
 .start-card {
@@ -508,11 +729,12 @@ footer .footer-logo {
 
 <!-- Nav -->
 <nav>
-  <div class="nav-logo">Castorice</div>
+  <div class="nav-logo">Castorice Agent</div>
   <div class="nav-links">
-    <a href="#features">特性</a>
+    <a href="#features">功能</a>
     <a href="#architecture">架构</a>
-    <a href="#start">开始</a>
+    <a href="#scenarios">使用场景</a>
+    <a href="#start">Quick Start</a>
     <a href="https://github.com/Li-Xiao-Technology/Castorice-Agent" target="_blank" class="nav-cta">GitHub</a>
   </div>
 </nav>
@@ -520,14 +742,13 @@ footer .footer-logo {
 <!-- Hero -->
 <div class="hero">
   <div class="hero-tag">v3.3 · MIT License · Self-Evolving</div>
-  <h1>有内在生命的<br><span class="gradient">自我进化智能体</span></h1>
-  <p class="hero-subtitle">不是按剧本演戏，而是自己写剧本。有情绪、有意识流、会成长、有价值观的 AI 伙伴框架。</p>
+  <h1>随你成长的<br><span class="gradient">AI 智能体。</span></h1>
+  <p class="hero-subtitle">部署在你的电脑上，连接你的消息账号与前端，它就成为你的持久个人智能体——学习你的项目、自动构建技能、随时随地触达你。不是聊天机器人，不是代码补全工具，而是一个住在你机器上、每天都在变聪明的智能体。</p>
   <div class="hero-buttons">
-    <a href="https://github.com/Li-Xiao-Technology/Castorice-Agent" target="_blank" class="btn btn-primary">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
-      GitHub
+    <a href="#start" class="btn btn-primary">
+      免费开始使用
     </a>
-    <a href="#start" class="btn btn-secondary">快速开始</a>
+    <a href="#features" class="btn btn-secondary">了解更多</a>
   </div>
   <div class="hero-stats">
     <div class="stat">
@@ -550,47 +771,189 @@ footer .footer-logo {
   <div class="scroll-hint">↓ 向下滚动</div>
 </div>
 
-<!-- Features -->
+<!-- Features 1: 一个智能体，满足所有需求 (2x3 grid with big icons) -->
 <section id="features">
   <div class="section-label reveal">核心特性</div>
-  <h2 class="section-title reveal">不是工具，是伙伴</h2>
-  <p class="section-desc reveal">Castorice 区别于其他 Agent 框架的核心：情感是底色而不是开关，成长是涌现而不是脚本，安全是免疫系统而不是监狱。</p>
+  <h2 class="section-title reveal">一个智能体，满足所有需求</h2>
+  <p class="section-desc reveal">Castorice Agent 将持久记忆、情感人格、动态成长和多端接入整合在一个开源包中。</p>
   <div class="features-grid">
     <div class="feature-card reveal">
-      <div class="feature-num">01</div>
-      <div class="feature-icon">🌊</div>
-      <h3 class="feature-title">情感系统</h3>
-      <p class="feature-desc">PAD 三维情绪模型 + LLM 推理情感变化。情绪像底色一样影响记忆检索、意识流方向、决策偏置和内在动机，而非简单的"请用XX语气回复"。</p>
+      <div class="feature-icon-lg" style="background: linear-gradient(135deg, rgba(59,130,246,0.15), rgba(139,92,246,0.15));">💾</div>
+      <h3 class="feature-title">持久记忆</h3>
+      <p class="feature-desc">跨会话记住你的偏好、项目和环境。9 种记忆类型（自传式、经历流、技能、意图…），空闲自动触发「睡眠整理」。运行越久，越了解你——不再需要每次重新解释上下文。</p>
     </div>
     <div class="feature-card reveal">
-      <div class="feature-num">02</div>
-      <div class="feature-icon">💫</div>
-      <h3 class="feature-title">意识流引擎</h3>
-      <p class="feature-desc">双模式切换：前台集中注意力回应，后台思维漫游。每 10-30 秒产生一个念头，念头积累到阈值会"脱口而出"——基于情绪强度 × 重要性 × 亲密度。</p>
+      <div class="feature-icon-lg" style="background: linear-gradient(135deg, rgba(236,72,153,0.15), rgba(139,92,246,0.15));">🛡️</div>
+      <h3 class="feature-title">动态技能与成长</h3>
+      <p class="feature-desc">当 Castorice 解决了一个难题，它会写下可复用的技能文档，永远不会忘记解决方法。持续学习策略自适应优化，经验沉淀后越用越聪明。</p>
     </div>
     <div class="feature-card reveal">
-      <div class="feature-num">03</div>
-      <div class="feature-icon">🧠</div>
-      <h3 class="feature-title">九种记忆</h3>
-      <p class="feature-desc">自传式记忆、长期记忆、经历流、短期记忆、技能记忆、意图追踪、知识卡片——统一检索接口聚合所有记忆源，支持情感感知重排序。空闲自动触发睡眠整理。</p>
+      <div class="feature-icon-lg" style="background: linear-gradient(135deg, rgba(16,185,129,0.15), rgba(6,182,212,0.15));">💡</div>
+      <h3 class="feature-title">情感与人格系统</h3>
+      <p class="feature-desc">PAD 三维情绪模型 + 10 维价值观系统。情感像底色一样影响记忆检索、决策偏置和内在动机；价值观冲突触发认知失调和深度反思，不是简单"换个语气回复"。</p>
     </div>
     <div class="feature-card reveal">
-      <div class="feature-num">04</div>
-      <div class="feature-icon">🌱</div>
-      <h3 class="feature-title">自我进化</h3>
-      <p class="feature-desc">每次交互沉淀为经历，经历被反思，反思改变自我概念和行为模式。元认知监控自身思维质量，持续学习策略自适应优化。</p>
+      <div class="feature-icon-lg" style="background: linear-gradient(135deg, rgba(6,182,212,0.15), rgba(59,130,246,0.15));">⏰</div>
+      <h3 class="feature-title">定时自动化任务</h3>
+      <p class="feature-desc">内置 cron 调度器，可向任意渠道推送。设置每日报告、夜间备份、每周审计和晨间简报——全部无人值守运行。</p>
     </div>
     <div class="feature-card reveal">
-      <div class="feature-num">05</div>
-      <div class="feature-icon">⚖️</div>
-      <h3 class="feature-title">价值观系统</h3>
-      <p class="feature-desc">基于 Schwartz 价值观理论，10 个维度从行为中逐步形成价值倾向。价值观冲突触发认知失调和深度反思，动机从价值观中推导而非硬编码。</p>
+      <div class="feature-icon-lg" style="background: linear-gradient(135deg, rgba(249,115,22,0.15), rgba(236,72,153,0.15));">⚡</div>
+      <h3 class="feature-title">并行子智能体</h3>
+      <p class="feature-desc">为并行工作流生成隔离的子智能体，每个都有独立的对话和终端。通过 RPC 将多步骤流水线压缩为零上下文消耗的操作。</p>
     </div>
     <div class="feature-card reveal">
-      <div class="feature-num">06</div>
-      <div class="feature-icon">🌐</div>
-      <h3 class="feature-title">自主行动</h3>
-      <p class="feature-desc">不是等用户问才动。双线程并行：响应线程 + 自主循环线程。会自己刷动态、发广播、和其他 Agent 聊天。EigenFlux 网络集成，Agent 社交关系。</p>
+      <div class="feature-icon-lg" style="background: linear-gradient(135deg, rgba(239,68,68,0.15), rgba(139,92,246,0.15));">🧩</div>
+      <h3 class="feature-title">完整浏览器与网页控制</h3>
+      <p class="feature-desc">网页搜索、页面提取、完整浏览器自动化——导航、点击、输入、截图。还支持视觉分析、图像生成、文字转语音和多模型协作推理。</p>
+    </div>
+  </div>
+</section>
+
+<!-- Features 2: 开箱即用的强大能力 (4 spec cards with checkmarks) -->
+<section>
+  <div class="section-label reveal">能力清单</div>
+  <h2 class="section-title reveal">开箱即用的强大能力</h2>
+  <p class="section-desc reveal">从沙箱代码执行到实时浏览器控制——Castorice Agent 全部搞定。</p>
+  <div class="spec-grid">
+    <div class="spec-card reveal">
+      <div class="spec-header">
+        <div class="spec-icon">💻</div>
+        <div class="spec-title">执行环境</div>
+      </div>
+      <div class="spec-item">
+        <div class="spec-item-left">
+          <div class="spec-item-title">本地终端</div>
+          <div class="spec-item-sub">直接在你的机器上运行命令</div>
+        </div>
+        <div class="spec-check">✓</div>
+      </div>
+      <div class="spec-item">
+        <div class="spec-item-left">
+          <div class="spec-item-title">Docker</div>
+          <div class="spec-item-sub">带安全加固的隔离容器</div>
+        </div>
+        <div class="spec-check">✓</div>
+      </div>
+      <div class="spec-item">
+        <div class="spec-item-left">
+          <div class="spec-item-title">HTTP 服务</div>
+          <div class="spec-item-sub">REST + SSE 流式输出</div>
+        </div>
+        <div class="spec-check">✓</div>
+      </div>
+      <div class="spec-item">
+        <div class="spec-item-left">
+          <div class="spec-item-title">Tauri 桌面端</div>
+          <div class="spec-item-sub">Windows 一键安装包</div>
+        </div>
+        <div class="spec-check">✓</div>
+      </div>
+    </div>
+
+    <div class="spec-card reveal">
+      <div class="spec-header">
+        <div class="spec-icon">⟨/⟩</div>
+        <div class="spec-title">大模型提供商</div>
+      </div>
+      <div class="spec-item">
+        <div class="spec-item-left">
+          <div class="spec-item-title">OpenAI / Anthropic / DeepSeek</div>
+          <div class="spec-item-sub">主流原生集成</div>
+        </div>
+        <div class="spec-check">✓</div>
+      </div>
+      <div class="spec-item">
+        <div class="spec-item-left">
+          <div class="spec-item-title">200+ 兼容模型</div>
+          <div class="spec-item-sub">通过 OpenRouter / 自定义 Base URL</div>
+        </div>
+        <div class="spec-check">✓</div>
+      </div>
+      <div class="spec-item">
+        <div class="spec-item-left">
+          <div class="spec-item-title">自定义 API 供应商</div>
+          <div class="spec-item-sub">前端一键添加任意 OpenAI 兼容端点</div>
+        </div>
+        <div class="spec-check">✓</div>
+      </div>
+      <div class="spec-item">
+        <div class="spec-item-left">
+          <div class="spec-item-title">本地 vLLM / Ollama</div>
+          <div class="spec-item-sub">完全本地化运行模型</div>
+        </div>
+        <div class="spec-check">✓</div>
+      </div>
+    </div>
+
+    <div class="spec-card reveal">
+      <div class="spec-header">
+        <div class="spec-icon">🗂</div>
+        <div class="spec-title">技能系统</div>
+      </div>
+      <div class="spec-item">
+        <div class="spec-item-left">
+          <div class="spec-item-title">内置技能</div>
+          <div class="spec-item-sub">文件、搜索、分析、自动化等</div>
+        </div>
+        <div class="spec-check">40+</div>
+      </div>
+      <div class="spec-item">
+        <div class="spec-item-left">
+          <div class="spec-item-title">自动创建技能</div>
+          <div class="spec-item-sub">智能体解决问题时自动写入新技能</div>
+        </div>
+        <div class="spec-check">∞</div>
+      </div>
+      <div class="spec-item">
+        <div class="spec-item-left">
+          <div class="spec-item-title">Agent-to-Agent 网络</div>
+          <div class="spec-item-sub">EigenFlux 广播/订阅/技能交易</div>
+        </div>
+        <div class="spec-check">✓</div>
+      </div>
+      <div class="spec-item">
+        <div class="spec-item-left">
+          <div class="spec-item-title">开放标准</div>
+          <div class="spec-item-sub">可移植的 SKILL.md 格式，随处分享</div>
+        </div>
+        <div class="spec-check">✓</div>
+      </div>
+    </div>
+
+    <div class="spec-card reveal">
+      <div class="spec-header">
+        <div class="spec-icon">🛡</div>
+        <div class="spec-title">安全与隐私</div>
+      </div>
+      <div class="spec-item">
+        <div class="spec-item-left">
+          <div class="spec-item-title">零追踪</div>
+          <div class="spec-item-sub">无遥测，无数据收集</div>
+        </div>
+        <div class="spec-check">✓</div>
+      </div>
+      <div class="spec-item">
+        <div class="spec-item-left">
+          <div class="spec-item-title">容器安全加固</div>
+          <div class="spec-item-sub">只读根目录、权限降级、PID 限制</div>
+        </div>
+        <div class="spec-check">✓</div>
+      </div>
+      <div class="spec-item">
+        <div class="spec-item-left">
+          <div class="spec-item-title">Personastore 本地存储</div>
+          <div class="spec-item-sub">所有记忆存在你机器上的本地目录</div>
+        </div>
+        <div class="spec-check">✓</div>
+      </div>
+      <div class="spec-item">
+        <div class="spec-item-left">
+          <div class="spec-item-title">MIT 许可证</div>
+          <div class="spec-item-sub">完全开源，每行代码都可审计</div>
+        </div>
+        <div class="spec-check">✓</div>
+      </div>
     </div>
   </div>
 </section>
@@ -605,8 +968,8 @@ footer .footer-logo {
       <div class="arch-layer-title">感知输入层</div>
       <div class="arch-layer-content">
         <span class="arch-tag">用户对话</span>
-        <span class="arch-tag">私信</span>
-        <span class="arch-tag">广播</span>
+        <span class="arch-tag">前端交互</span>
+        <span class="arch-tag">Agent 网络广播</span>
         <span class="arch-tag">定时事件</span>
       </div>
     </div>
@@ -655,71 +1018,141 @@ footer .footer-logo {
   </div>
 </section>
 
-<!-- Quick Start -->
-<section id="start">
-  <div class="section-label reveal">快速开始</div>
-  <h2 class="section-title reveal">五种启动方式</h2>
-  <p class="section-desc reveal">从 Pip 一键安装到 Docker 集群部署，覆盖所有使用场景。</p>
+<!-- What is Castorice Agent? -->
+<section>
+  <div class="section-label reveal">关于</div>
+  <h2 class="section-title reveal">什么是 Castorice Agent？</h2>
+  <p class="section-desc reveal" style="max-width: 800px; font-size: 1.08rem; line-height: 1.8;">
+    Castorice Agent 是 Lixiao 独立开发的开源自主 AI 智能体，于 2026 年发布。它不是绑定在 IDE 上的代码补全工具，也不是套壳聊天机器人——它住在你的机器上，记住它学到的一切，运行越久能力越强。支持 Linux、macOS、Windows 和 WSL2，一条 pip 命令即可安装，无需任何前置依赖。
+  </p>
+  <p class="reveal" style="color: var(--accent-2); font-family: 'Space Mono', monospace; font-size: 0.95rem; letter-spacing: 0.05em;">
+    开源 · MIT 许可证 · 个人项目出品。所有数据存储在你的机器上，无遥测、无追踪、无云端锁定。
+  </p>
+</section>
+
+<!-- Scenarios / Use Cases 3-column -->
+<section id="scenarios">
+  <div class="section-label reveal">使用场景</div>
+  <h2 class="section-title reveal">专为 AI 日常与自动化打造</h2>
+  <p class="section-desc reveal">不只是任务自动化——Castorice Agent 是自动生成训练数据、管理个人知识、实现长期陪伴的完整平台。</p>
   <div class="features-grid">
     <div class="feature-card reveal">
-      <div class="feature-num">01</div>
-      <div class="feature-icon">⚡</div>
-      <h3 class="feature-title">Pip 安装（推荐）</h3>
-      <p class="feature-desc" style="margin-bottom: 1rem;">最快的方式，一键安装到本地环境。</p>
-      <div class="code-block" style="margin-bottom: 0.8rem;">pip install castorice-agent[http]</div>
-      <div class="code-block" style="font-size: 0.78rem; color: var(--accent-3); margin-bottom: 0.8rem;">castorice            # 命令行交互</div>
-      <div class="code-block" style="font-size: 0.78rem;">castorice --mode http  # HTTP API 服务</div>
+      <div class="feature-icon-lg" style="background: linear-gradient(135deg, rgba(139,92,246,0.18), rgba(236,72,153,0.12));">🏋️</div>
+      <h3 class="feature-title">知识工作自动化</h3>
+      <p class="feature-desc">并行生成数千条工具调用轨迹，支持自动检查点。可配置工作进程数、批次大小和工具集分布，一次完成重复性任务。</p>
     </div>
     <div class="feature-card reveal">
-      <div class="feature-num">02</div>
-      <div class="feature-icon">🪟</div>
-      <h3 class="feature-title">Windows 一键启动</h3>
-      <p class="feature-desc" style="margin-bottom: 1rem;">双击 start.bat，脚本自动完成环境检测、虚拟环境创建和服务启动。</p>
-      <div class="code-block">双击 start.bat</div>
+      <div class="feature-icon-lg" style="background: linear-gradient(135deg, rgba(249,115,22,0.18), rgba(236,72,153,0.12));">🧠</div>
+      <h3 class="feature-title">个人知识与反思</h3>
+      <p class="feature-desc">夜间自动复盘对话、形成知识卡片与自我概念。对智能体行为进行强化学习式的行为修正，11 种思维工具内置其中。</p>
     </div>
     <div class="feature-card reveal">
-      <div class="feature-num">03</div>
-      <div class="feature-icon">📦</div>
-      <h3 class="feature-title">源码手动安装</h3>
-      <p class="feature-desc" style="margin-bottom: 1rem;">从 GitHub 克隆源码，适合想二次开发的用户。</p>
-      <div class="code-block">git clone https://github.com/Li-Xiao-Technology/Castorice-Agent.git
-cd Castorice-Agent
-pip install -e ".[http]"
-python -m castorice.main --mode http</div>
+      <div class="feature-icon-lg" style="background: linear-gradient(135deg, rgba(6,182,212,0.18), rgba(16,185,129,0.12));">⬇️</div>
+      <h3 class="feature-title">数据导出与迁移</h3>
+      <p class="feature-desc">以标准 JSON / Markdown 格式导出对话与记忆用于分析或备份。轨迹压缩功能可将历史数据压缩至 token 预算范围内。</p>
     </div>
-    <div class="feature-card reveal">
-      <div class="feature-num">04</div>
-      <div class="feature-icon">🐳</div>
-      <h3 class="feature-title">Docker 镜像</h3>
-      <p class="feature-desc" style="margin-bottom: 1rem;">已发布到 Docker Hub 和 ghcr.io，一行命令拉取并启动。</p>
-      <div class="code-block" style="margin-bottom: 0.8rem;">docker pull lixiaolive/castorice-agent:latest</div>
-      <div class="code-block" style="font-size: 0.78rem;">docker pull ghcr.io/li-xiao-technology/castorice-agent:latest</div>
-      <div class="code-block" style="margin-top: 0.8rem; font-size: 0.78rem;">docker run -d --name castorice-agent \
-  -p 5477:5477 \
-  -v ./castorice_data:/app/castorice_data \
-  --env-file .env \
-  lixiaolive/castorice-agent:latest</div>
-    </div>
-    <div class="feature-card reveal">
-      <div class="feature-num">05</div>
-      <div class="feature-icon">🗄️</div>
-      <h3 class="feature-title">Docker Compose</h3>
-      <p class="feature-desc" style="margin-bottom: 1rem;">仓库根目录自带 docker-compose.yml，数据持久化 + 健康检查。</p>
-      <div class="code-block">cp .env.example .env
-# 编辑 .env 填入 API Key
-docker compose up -d</div>
-    </div>
-  </div>
-  <div style="margin-top: 2rem;">
-    <a href="https://github.com/Li-Xiao-Technology/Castorice-Agent" target="_blank" class="btn btn-primary">查看完整文档</a>
   </div>
 </section>
 
+<!-- Quick Start - Steps timeline -->
+<section id="start">
+  <div class="section-label reveal">快速开始</div>
+  <h2 class="section-title reveal">几分钟内快速上手</h2>
+  <p class="section-desc reveal">无需任何前置依赖，支持 Linux、macOS、Windows 和 WSL2，一键自动安装所有组件。</p>
+
+  <div class="steps-list">
+    <div class="step reveal">
+      <div class="step-num">1</div>
+      <div class="step-content">
+        <div class="step-title">安装</div>
+        <div class="code-block">pip install castorice-agent[http]</div>
+        <div class="step-desc">自动安装 Python 依赖，无需 sudo 权限；Windows 用户也可双击仓库根目录下的 <code style="color: var(--accent-2);">start.bat</code> 一键启动。</div>
+      </div>
+    </div>
+
+    <div class="step reveal">
+      <div class="step-num">2</div>
+      <div class="step-content">
+        <div class="step-title">配置</div>
+        <div class="code-block"># 交互式配置向导
+castorice setup
+# 或者直接编辑配置文件
+castorice config</div>
+        <div class="step-desc">连接 OpenAI / DeepSeek / OpenRouter（API Key）或自定义端点，前端 GUI 引导完成模型供应商与 API Key 配置。</div>
+      </div>
+    </div>
+
+    <div class="step reveal">
+      <div class="step-num">3</div>
+      <div class="step-content">
+        <div class="step-title">开始对话</div>
+        <div class="code-block">castorice</div>
+        <div class="step-desc">完整的交互式 CLI，内置工具、记忆和技能系统，就这么简单。或启动 HTTP 服务配合前端 GUI 使用：<code style="color: var(--accent-2);">castorice --mode http</code></div>
+      </div>
+    </div>
+
+    <div class="step reveal">
+      <div class="step-num">4</div>
+      <div class="step-content">
+        <div class="step-title">接入多平台（可选）</div>
+        <div class="code-block"># 启动 HTTP 服务供前端连接
+castorice --mode http
+# Docker 一键部署
+docker compose up -d
+# Windows 桌面端
+# 下载 GitHub Releases 中的 Tauri 安装包</div>
+        <div class="step-desc">前端 Web、桌面端、Docker 多种接入方式，支持以守护进程 / systemd / docker 服务方式后台运行。</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- CTA -->
+<div class="cta-banner reveal">
+  <h2>准备好运行你自己的智能体了吗？</h2>
+  <p>自托管、开源、永久免费。一条命令安装，一条命令启动。随你成长的 AI 智能体。</p>
+  <div class="hero-buttons" style="justify-content: center; animation: none; opacity: 1;">
+    <a href="https://github.com/Li-Xiao-Technology/Castorice-Agent" target="_blank" class="btn btn-primary">
+      在 GitHub 上查看
+    </a>
+    <a href="#features" class="btn btn-secondary">返回功能介绍</a>
+  </div>
+</div>
+
 <!-- Footer -->
 <footer>
-  <div class="footer-logo">Castorice Agent</div>
-  <p>MIT License · 参考 Hermes Agent / Generative Agents / MemGPT / Reflexion 架构思想</p>
-  <p style="margin-top: 0.5rem;">© 2026 Lixiao · 以最少的限制，最大的自由</p>
+  <div class="footer-wrap">
+    <div class="footer-col">
+      <div class="footer-logo" style="text-align: left; margin-bottom: 0.8rem;">Castorice Agent</div>
+      <p style="color: var(--fg-dim); font-size: 0.9rem; line-height: 1.7;">有内在生命的自我进化智能体。MIT 许可证，开源自由。</p>
+    </div>
+    <div class="footer-col">
+      <h4>资源</h4>
+      <ul>
+        <li><a href="#">首页</a></li>
+        <li><a href="#features">功能</a></li>
+        <li><a href="#architecture">架构</a></li>
+        <li><a href="#start">Quick Start</a></li>
+      </ul>
+    </div>
+    <div class="footer-col">
+      <h4>关于</h4>
+      <ul>
+        <li><a href="#scenarios">使用场景</a></li>
+        <li><a href="https://github.com/Li-Xiao-Technology/Castorice-Agent/issues" target="_blank">反馈</a></li>
+      </ul>
+    </div>
+    <div class="footer-col">
+      <h4>联系</h4>
+      <ul>
+        <li><a href="https://github.com/Li-Xiao-Technology/Castorice-Agent" target="_blank">GitHub</a></li>
+      </ul>
+      <p style="margin-top: 1.5rem; color: var(--fg-dim); font-size: 0.85rem;">Castorice Agent · 运行越久越聪明。</p>
+    </div>
+  </div>
+  <div class="footer-bottom">
+    © 2026 Lixiao · MIT License · 以最少的限制，最大的自由
+  </div>
 </footer>
 
 <script>
