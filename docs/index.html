@@ -1,0 +1,704 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Castorice Agent — 有内在生命的自我进化智能体</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@200;400;700;900&family=Space+Mono:wght@400;700&family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #0a0712;
+  --bg-soft: #120e1f;
+  --fg: #e8e4f0;
+  --fg-dim: #9890b0;
+  --accent: #8b5cf6;
+  --accent-2: #06b6d4;
+  --accent-3: #ec4899;
+  --border: rgba(139, 92, 246, 0.15);
+  --card: rgba(18, 14, 31, 0.6);
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: 'Noto Sans SC', sans-serif;
+  font-weight: 300;
+  line-height: 1.7;
+  overflow-x: hidden;
+  position: relative;
+}
+
+/* Starfield background */
+.starfield {
+  position: fixed;
+  top: 0; left: 0; width: 100%; height: 100%;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.star {
+  position: absolute;
+  background: white;
+  border-radius: 50%;
+  opacity: 0;
+  animation: twinkle var(--dur) ease-in-out infinite var(--delay);
+}
+
+@keyframes twinkle {
+  0%, 100% { opacity: 0; }
+  50% { opacity: var(--brightness); }
+}
+
+/* Nebula glow */
+.nebula {
+  position: fixed;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: 0.15;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.nebula-1 { top: 10%; left: 60%; width: 500px; height: 500px; background: var(--accent); }
+.nebula-2 { top: 60%; left: 10%; width: 400px; height: 400px; background: var(--accent-2); }
+.nebula-3 { top: 30%; left: 30%; width: 300px; height: 300px; background: var(--accent-3); opacity: 0.08; }
+
+/* Navigation */
+nav {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 100;
+  padding: 1rem 2rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  backdrop-filter: blur(12px);
+  background: rgba(10, 7, 18, 0.7);
+  border-bottom: 1px solid var(--border);
+}
+
+.nav-logo {
+  font-family: 'Noto Serif SC', serif;
+  font-weight: 900;
+  font-size: 1.3rem;
+  letter-spacing: 0.05em;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.nav-links { display: flex; gap: 2rem; align-items: center; }
+
+.nav-links a {
+  color: var(--fg-dim);
+  text-decoration: none;
+  font-size: 0.9rem;
+  font-weight: 400;
+  transition: color 0.3s;
+}
+
+.nav-links a:hover { color: var(--fg); }
+
+.nav-cta {
+  padding: 0.5rem 1.2rem;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  color: var(--fg) !important;
+  transition: all 0.3s;
+}
+
+.nav-cta:hover {
+  background: var(--accent);
+  box-shadow: 0 0 20px rgba(139, 92, 246, 0.4);
+}
+
+/* Hero */
+.hero {
+  position: relative;
+  z-index: 1;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  padding: 2rem;
+}
+
+.hero-tag {
+  font-family: 'Space Mono', monospace;
+  font-size: 0.8rem;
+  color: var(--accent-2);
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  margin-bottom: 1.5rem;
+  opacity: 0;
+  animation: fadeInUp 0.8s ease forwards 0.2s;
+}
+
+.hero h1 {
+  font-family: 'Noto Serif SC', serif;
+  font-weight: 900;
+  font-size: clamp(2.5rem, 7vw, 5.5rem);
+  line-height: 1.1;
+  margin-bottom: 1rem;
+  opacity: 0;
+  animation: fadeInUp 1s ease forwards 0.4s;
+}
+
+.hero h1 .gradient {
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 50%, var(--accent-3) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  display: inline-block;
+}
+
+.hero-subtitle {
+  font-size: clamp(1rem, 2vw, 1.3rem);
+  color: var(--fg-dim);
+  max-width: 600px;
+  margin-bottom: 2.5rem;
+  opacity: 0;
+  animation: fadeInUp 1s ease forwards 0.6s;
+}
+
+.hero-buttons {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  justify-content: center;
+  opacity: 0;
+  animation: fadeInUp 1s ease forwards 0.8s;
+}
+
+.btn {
+  padding: 0.8rem 2rem;
+  border-radius: 12px;
+  font-size: 0.95rem;
+  font-weight: 500;
+  text-decoration: none;
+  transition: all 0.3s;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, var(--accent), var(--accent-3));
+  color: white;
+  box-shadow: 0 4px 20px rgba(139, 92, 246, 0.3);
+}
+
+.btn-primary:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 30px rgba(139, 92, 246, 0.5);
+}
+
+.btn-secondary {
+  background: transparent;
+  color: var(--fg);
+  border: 1px solid var(--border);
+}
+
+.btn-secondary:hover {
+  border-color: var(--accent);
+  background: rgba(139, 92, 246, 0.1);
+}
+
+.hero-stats {
+  display: flex;
+  gap: 3rem;
+  margin-top: 4rem;
+  opacity: 0;
+  animation: fadeInUp 1s ease forwards 1s;
+}
+
+.stat { text-align: center; }
+
+.stat-num {
+  font-family: 'Space Mono', monospace;
+  font-size: 1.8rem;
+  font-weight: 700;
+  color: var(--accent-2);
+}
+
+.stat-label {
+  font-size: 0.8rem;
+  color: var(--fg-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+/* Sections */
+section {
+  position: relative;
+  z-index: 1;
+  padding: 6rem 2rem;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.section-label {
+  font-family: 'Space Mono', monospace;
+  font-size: 0.8rem;
+  color: var(--accent-2);
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  margin-bottom: 1rem;
+}
+
+.section-title {
+  font-family: 'Noto Serif SC', serif;
+  font-weight: 700;
+  font-size: clamp(1.8rem, 4vw, 2.8rem);
+  margin-bottom: 1rem;
+}
+
+.section-desc {
+  color: var(--fg-dim);
+  font-size: 1.05rem;
+  max-width: 600px;
+  margin-bottom: 3rem;
+}
+
+/* Feature grid */
+.features-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 1.5rem;
+}
+
+.feature-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 2rem;
+  position: relative;
+  overflow: hidden;
+  transition: all 0.4s;
+  backdrop-filter: blur(10px);
+}
+
+.feature-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  opacity: 0;
+  transition: opacity 0.4s;
+}
+
+.feature-card:hover {
+  transform: translateY(-4px);
+  border-color: rgba(139, 92, 246, 0.3);
+  box-shadow: 0 12px 40px rgba(139, 92, 246, 0.1);
+}
+
+.feature-card:hover::before { opacity: 1; }
+
+.feature-num {
+  font-family: 'Space Mono', monospace;
+  font-size: 0.75rem;
+  color: var(--accent);
+  opacity: 0.6;
+  margin-bottom: 0.5rem;
+}
+
+.feature-icon {
+  width: 48px; height: 48px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.5rem;
+  margin-bottom: 1.2rem;
+  background: rgba(139, 92, 246, 0.1);
+  border: 1px solid var(--border);
+}
+
+.feature-title {
+  font-family: 'Noto Serif SC', serif;
+  font-weight: 700;
+  font-size: 1.2rem;
+  margin-bottom: 0.5rem;
+}
+
+.feature-desc {
+  color: var(--fg-dim);
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+
+/* Architecture */
+.arch-block {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 3rem;
+  backdrop-filter: blur(10px);
+}
+
+.arch-layer {
+  padding: 1rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.arch-layer:last-child { border-bottom: none; }
+
+.arch-layer-title {
+  font-family: 'Space Mono', monospace;
+  font-size: 0.8rem;
+  color: var(--accent-2);
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  margin-bottom: 0.5rem;
+}
+
+.arch-layer-content {
+  color: var(--fg-dim);
+  font-size: 0.95rem;
+}
+
+.arch-tag {
+  display: inline-block;
+  padding: 0.2rem 0.7rem;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  margin: 0.2rem 0.3rem;
+  background: rgba(139, 92, 246, 0.1);
+  border: 1px solid var(--border);
+  color: var(--fg);
+}
+
+/* Quick start */
+.start-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+}
+
+@media (max-width: 768px) {
+  .start-grid { grid-template-columns: 1fr; }
+  .hero-stats { gap: 1.5rem; }
+  nav { padding: 0.8rem 1rem; }
+  .nav-links { gap: 1rem; }
+  .nav-links a:not(.nav-cta) { display: none; }
+}
+
+.start-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 2rem;
+  backdrop-filter: blur(10px);
+}
+
+.start-card h3 {
+  font-family: 'Noto Serif SC', serif;
+  font-size: 1.1rem;
+  margin-bottom: 1rem;
+}
+
+.code-block {
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1rem;
+  font-family: 'Space Mono', monospace;
+  font-size: 0.85rem;
+  color: var(--accent-2);
+  overflow-x: auto;
+  white-space: pre;
+}
+
+/* Footer */
+footer {
+  position: relative;
+  z-index: 1;
+  text-align: center;
+  padding: 4rem 2rem;
+  border-top: 1px solid var(--border);
+  margin-top: 4rem;
+}
+
+footer p {
+  color: var(--fg-dim);
+  font-size: 0.9rem;
+}
+
+footer .footer-logo {
+  font-family: 'Noto Serif SC', serif;
+  font-weight: 900;
+  font-size: 1.5rem;
+  margin-bottom: 0.5rem;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* Animations */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(30px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.reveal {
+  opacity: 0;
+  transform: translateY(40px);
+  transition: opacity 0.8s ease, transform 0.8s ease;
+}
+
+.reveal.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Scroll indicator */
+.scroll-hint {
+  position: absolute;
+  bottom: 2rem;
+  left: 50%;
+  transform: translateX(-50%);
+  color: var(--fg-dim);
+  font-size: 0.8rem;
+  animation: bounce 2s infinite;
+  opacity: 0;
+  animation: fadeInUp 1s ease forwards 1.2s, bounce 2s infinite 2s;
+}
+
+@keyframes bounce {
+  0%, 100% { transform: translateX(-50%) translateY(0); }
+  50% { transform: translateX(-50%) translateY(10px); }
+}
+</style>
+</head>
+<body>
+
+<!-- Starfield -->
+<div class="starfield" id="starfield"></div>
+<div class="nebula nebula-1"></div>
+<div class="nebula nebula-2"></div>
+<div class="nebula nebula-3"></div>
+
+<!-- Nav -->
+<nav>
+  <div class="nav-logo">Castorice</div>
+  <div class="nav-links">
+    <a href="#features">特性</a>
+    <a href="#architecture">架构</a>
+    <a href="#start">开始</a>
+    <a href="https://github.com/Li-Xiao-Technology/Castorice-Agent" target="_blank" class="nav-cta">GitHub</a>
+  </div>
+</nav>
+
+<!-- Hero -->
+<div class="hero">
+  <div class="hero-tag">v3.3 · MIT License · Self-Evolving</div>
+  <h1>有内在生命的<br><span class="gradient">自我进化智能体</span></h1>
+  <p class="hero-subtitle">不是按剧本演戏，而是自己写剧本。有情绪、有意识流、会成长、有价值观的 AI 伙伴框架。</p>
+  <div class="hero-buttons">
+    <a href="https://github.com/Li-Xiao-Technology/Castorice-Agent" target="_blank" class="btn btn-primary">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+      GitHub
+    </a>
+    <a href="#start" class="btn btn-secondary">快速开始</a>
+  </div>
+  <div class="hero-stats">
+    <div class="stat">
+      <div class="stat-num">9</div>
+      <div class="stat-label">记忆类型</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num">11</div>
+      <div class="stat-label">原子能力</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num">8+</div>
+      <div class="stat-label">模型供应商</div>
+    </div>
+    <div class="stat">
+      <div class="stat-num">5</div>
+      <div class="stat-label">安全层级</div>
+    </div>
+  </div>
+  <div class="scroll-hint">↓ 向下滚动</div>
+</div>
+
+<!-- Features -->
+<section id="features">
+  <div class="section-label reveal">核心特性</div>
+  <h2 class="section-title reveal">不是工具，是伙伴</h2>
+  <p class="section-desc reveal">Castorice 区别于其他 Agent 框架的核心：情感是底色而不是开关，成长是涌现而不是脚本，安全是免疫系统而不是监狱。</p>
+  <div class="features-grid">
+    <div class="feature-card reveal">
+      <div class="feature-num">01</div>
+      <div class="feature-icon">🌊</div>
+      <h3 class="feature-title">情感系统</h3>
+      <p class="feature-desc">PAD 三维情绪模型 + LLM 推理情感变化。情绪像底色一样影响记忆检索、意识流方向、决策偏置和内在动机，而非简单的"请用XX语气回复"。</p>
+    </div>
+    <div class="feature-card reveal">
+      <div class="feature-num">02</div>
+      <div class="feature-icon">💫</div>
+      <h3 class="feature-title">意识流引擎</h3>
+      <p class="feature-desc">双模式切换：前台集中注意力回应，后台思维漫游。每 10-30 秒产生一个念头，念头积累到阈值会"脱口而出"——基于情绪强度 × 重要性 × 亲密度。</p>
+    </div>
+    <div class="feature-card reveal">
+      <div class="feature-num">03</div>
+      <div class="feature-icon">🧠</div>
+      <h3 class="feature-title">九种记忆</h3>
+      <p class="feature-desc">自传式记忆、长期记忆、经历流、短期记忆、技能记忆、意图追踪、知识卡片——统一检索接口聚合所有记忆源，支持情感感知重排序。空闲自动触发睡眠整理。</p>
+    </div>
+    <div class="feature-card reveal">
+      <div class="feature-num">04</div>
+      <div class="feature-icon">🌱</div>
+      <h3 class="feature-title">自我进化</h3>
+      <p class="feature-desc">每次交互沉淀为经历，经历被反思，反思改变自我概念和行为模式。元认知监控自身思维质量，持续学习策略自适应优化。</p>
+    </div>
+    <div class="feature-card reveal">
+      <div class="feature-num">05</div>
+      <div class="feature-icon">⚖️</div>
+      <h3 class="feature-title">价值观系统</h3>
+      <p class="feature-desc">基于 Schwartz 价值观理论，10 个维度从行为中逐步形成价值倾向。价值观冲突触发认知失调和深度反思，动机从价值观中推导而非硬编码。</p>
+    </div>
+    <div class="feature-card reveal">
+      <div class="feature-num">06</div>
+      <div class="feature-icon">🌐</div>
+      <h3 class="feature-title">自主行动</h3>
+      <p class="feature-desc">不是等用户问才动。双线程并行：响应线程 + 自主循环线程。会自己刷动态、发广播、和其他 Agent 聊天。EigenFlux 网络集成，Agent 社交关系。</p>
+    </div>
+  </div>
+</section>
+
+<!-- Architecture -->
+<section id="architecture">
+  <div class="section-label reveal">系统架构</div>
+  <h2 class="section-title reveal">三层架构 + 数据主权</h2>
+  <p class="section-desc reveal">感知输入层 → 认知内核层 → 输出行动层，底部 Personastore 人格数据主权层，四个数据域独立读写、可导出迁移。</p>
+  <div class="arch-block reveal">
+    <div class="arch-layer">
+      <div class="arch-layer-title">感知输入层</div>
+      <div class="arch-layer-content">
+        <span class="arch-tag">用户对话</span>
+        <span class="arch-tag">私信</span>
+        <span class="arch-tag">广播</span>
+        <span class="arch-tag">定时事件</span>
+      </div>
+    </div>
+    <div class="arch-layer">
+      <div class="arch-layer-title">认知内核层</div>
+      <div class="arch-layer-content">
+        <span class="arch-tag">情感底色</span>
+        <span class="arch-tag">意识流</span>
+        <span class="arch-tag">思维流</span>
+        <span class="arch-tag">自主思考循环</span>
+        <span class="arch-tag">11 原子能力</span>
+      </div>
+    </div>
+    <div class="arch-layer">
+      <div class="arch-layer-title">记忆 + 自我进化</div>
+      <div class="arch-layer-content">
+        <span class="arch-tag">9 种记忆类型</span>
+        <span class="arch-tag">反思</span>
+        <span class="arch-tag">元认知</span>
+        <span class="arch-tag">自我概念</span>
+        <span class="arch-tag">持续学习</span>
+      </div>
+    </div>
+    <div class="arch-layer">
+      <div class="arch-layer-title">支撑 & 防护层</div>
+      <div class="arch-layer-content">
+        <span class="arch-tag">价值观</span>
+        <span class="arch-tag">动机</span>
+        <span class="arch-tag">目标管理</span>
+        <span class="arch-tag">成本闸</span>
+        <span class="arch-tag">熔断器</span>
+        <span class="arch-tag">五层安全防御</span>
+      </div>
+    </div>
+    <div class="arch-layer">
+      <div class="arch-layer-title">Personastore 人格数据主权</div>
+      <div class="arch-layer-content">
+        <span class="arch-tag">经历流</span>
+        <span class="arch-tag">自我概念</span>
+        <span class="arch-tag">情感状态</span>
+        <span class="arch-tag">价值观</span>
+        <span class="arch-tag">访问控制</span>
+        <span class="arch-tag">一键导出</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Quick Start -->
+<section id="start">
+  <div class="section-label reveal">快速开始</div>
+  <h2 class="section-title reveal">三分钟启动</h2>
+  <p class="section-desc reveal">Windows 用户双击即用，或手动安装。</p>
+  <div class="start-grid">
+    <div class="start-card reveal">
+      <h3>🪟 Windows 一键启动</h3>
+      <p style="color: var(--fg-dim); font-size: 0.9rem; margin-bottom: 1rem;">双击 start.bat，脚本自动完成一切。</p>
+      <div class="code-block">双击 start.bat</div>
+    </div>
+    <div class="start-card reveal">
+      <h3>📦 手动安装</h3>
+      <div class="code-block">git clone https://github.com/Li-Xiao-Technology/Castorice-Agent.git
+cd Castorice-Agent
+pip install -e ".[http]"
+python -m castorice.main --mode http</div>
+    </div>
+  </div>
+  <div style="margin-top: 2rem;">
+    <a href="https://github.com/Li-Xiao-Technology/Castorice-Agent" target="_blank" class="btn btn-primary">查看完整文档</a>
+  </div>
+</section>
+
+<!-- Footer -->
+<footer>
+  <div class="footer-logo">Castorice Agent</div>
+  <p>MIT License · 参考 Hermes Agent / Generative Agents / MemGPT / Reflexion 架构思想</p>
+  <p style="margin-top: 0.5rem;">© 2026 Lixiao · 以最少的限制，最大的自由</p>
+</footer>
+
+<script>
+// Generate starfield
+(function() {
+  var sf = document.getElementById('starfield');
+  for (var i = 0; i < 150; i++) {
+    var s = document.createElement('div');
+    s.className = 'star';
+    var size = Math.random() * 2 + 0.5;
+    s.style.width = size + 'px';
+    s.style.height = size + 'px';
+    s.style.left = Math.random() * 100 + '%';
+    s.style.top = Math.random() * 100 + '%';
+    s.style.setProperty('--dur', (Math.random() * 3 + 2) + 's');
+    s.style.setProperty('--delay', Math.random() * 5 + 's');
+    s.style.setProperty('--brightness', (Math.random() * 0.6 + 0.3));
+    sf.appendChild(s);
+  }
+})();
+
+// Scroll reveal
+(function() {
+  var observer = new IntersectionObserver(function(entries) {
+    entries.forEach(function(e) {
+      if (e.isIntersecting) {
+        e.target.classList.add('visible');
+      }
+    });
+  }, { threshold: 0.1 });
+  document.querySelectorAll('.reveal').forEach(function(el) {
+    observer.observe(el);
+  });
+})();
+</script>
+</body>
+</html>
