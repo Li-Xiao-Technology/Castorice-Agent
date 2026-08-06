@@ -48,7 +48,8 @@ jobs:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-    - name: 构建并推送镜像
+    - name: 构建并推送镜像（仅 ghcr.io）
+      if: ${{ secrets.DOCKERHUB_USERNAME == '' || secrets.DOCKERHUB_TOKEN == '' }}
       uses: docker/build-push-action@v6
       with:
         context: .
@@ -57,8 +58,19 @@ jobs:
         tags: |
           ghcr.io/${{ env.OWNER_LC }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
           ghcr.io/${{ env.OWNER_LC }}/${{ env.IMAGE_NAME }}:latest
-          ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' && format('docker.io/{0}/{1}:{2}', secrets.DOCKERHUB_USERNAME, env.IMAGE_NAME, steps.meta.outputs.version) || '' }}
-          ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' && format('docker.io/{0}/{1}:latest', secrets.DOCKERHUB_USERNAME, env.IMAGE_NAME) || '' }}
+
+    - name: 构建并推送镜像（ghcr.io + Docker Hub）
+      if: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        file: ./Dockerfile
+        push: true
+        tags: |
+          ghcr.io/${{ env.OWNER_LC }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+          ghcr.io/${{ env.OWNER_LC }}/${{ env.IMAGE_NAME }}:latest
+          docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+          docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest
 
     - name: 输出拉取命令
       run: |
