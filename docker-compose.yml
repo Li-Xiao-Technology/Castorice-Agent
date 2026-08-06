@@ -2,11 +2,10 @@ version: '3.8'
 
 services:
   castorice-agent:
-    build: .
-    image: castorice-agent:latest
+    image: ghcr.io/li-xiao-technology/castorice-agent:latest
     container_name: castorice-agent
     ports:
-      - "8000:8000"
+      - "5477:5477"
     environment:
       - CASTORICE_LLM_PROVIDER=${CASTORICE_LLM_PROVIDER:-openai}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
@@ -16,11 +15,10 @@ services:
       - LLM_MAX_TOKENS=${LLM_MAX_TOKENS:-4096}
     volumes:
       - ./castorice_data:/app/castorice_data
-      - ./logs:/app/logs
       - ./.env:/app/.env:ro
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/status"]
+      test: ["CMD", "curl", "-f", "http://localhost:5477/status"]
       interval: 30s
       timeout: 10s
       retries: 3

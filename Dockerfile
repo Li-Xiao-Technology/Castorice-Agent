@@ -12,13 +12,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
+# 先复制依赖文件，利用 Docker 层缓存
 COPY pyproject.toml .
-RUN pip install --no-cache-dir -e . || pip install --no-cache-dir --no-deps -e .
-
-COPY . .
+COPY castorice/ ./castorice/
 
 RUN pip install --no-cache-dir -e .
 
-EXPOSE 8000
+EXPOSE 5477
 
 CMD ["python", "-m", "castorice.main", "--mode", "http"]

@@ -1,0 +1,57 @@
+name: Docker
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+env:
+  IMAGE_NAME: castorice-agent
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: 设置小写镜像名
+      run: |
+        echo "OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
+    - name: 提取版本号
+      id: meta
+      run: |
+        if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+          VERSION="${{ github.ref_name }}"
+        else
+          VERSION="latest"
+        fi
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+    - name: 登录 ghcr.io
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: 构建并推送镜像
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        file: ./Dockerfile
+        push: true
+        tags: |
+          ghcr.io/${{ env.OWNER_LC }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+          ghcr.io/${{ env.OWNER_LC }}/${{ env.IMAGE_NAME }}:latest
+
+    - name: 输出拉取命令
+      run: |
+        echo "✅ 镜像构建成功！"
+        echo "📦 拉取命令："
+        echo "   docker pull ghcr.io/${{ env.OWNER_LC }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}"
