@@ -1,0 +1,88 @@
+name: 🐛 Bug 报告
+description: 报告一个可复现的问题
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢你花时间报告 Bug！请尽量填全以下信息，帮助我们快速定位。
+        如果你发现的是**安全漏洞**，请勿在此公开提交，改用 [安全报告渠道](../security/policy)。
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug 描述
+      description: 简要说明出了什么问题。
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      description: 你做了什么？请给出具体命令或操作。
+      placeholder: |
+        1. 运行 `castorice ...`
+        2. 输入 ...
+        3. 看到 ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望行为
+      description: 你认为应该发生什么？
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际行为
+      description: 实际发生了什么？
+    validations:
+      required: true
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: 运行模式
+      options:
+        - 命令行交互（castorice）
+        - HTTP 服务（castorice --mode http）
+        - Docker
+        - Tauri 桌面端
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: 操作系统
+      placeholder: Windows 11 / macOS 14 / Ubuntu 22.04
+    validations:
+      required: true
+
+  - type: input
+    id: python
+    attributes:
+      label: Python 版本
+      placeholder: 3.10.12
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Castorice Agent 版本
+      placeholder: 3.3.0
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志 / 报错信息
+      description: 把相关日志粘贴在这里（注意不要贴 API Key）。
+      render: shell

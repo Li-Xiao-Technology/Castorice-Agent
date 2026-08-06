@@ -4,6 +4,14 @@
 
 > 参考 Hermes Agent / Generative Agents / MemGPT / Reflexion 论文架构，**完全自研主循环**，零 LangGraph 依赖
 
+![version](https://img.shields.io/badge/version-3.3.0-8b5cf6?style=flat-square)
+![license](https://img.shields.io/badge/license-MIT-blue?style=flat-square)
+![python](https://img.shields.io/badge/python-3.10+-green?style=flat-square)
+![CI](https://github.com/Li-Xiao-Technology/Castorice-Agent/actions/workflows/ci.yml/badge.svg?style=flat-square)
+![Docker Pulls](https://img.shields.io/docker/pulls/lixiaolive/castorice-agent?style=flat-square)
+![GitHub Release](https://img.shields.io/github/v/release/Li-Xiao-Technology/Castorice-Agent?style=flat-square)
+![Security](https://img.shields.io/badge/security-policy-🔒-red?style=flat-square)
+
 ---
 
 ## 项目定位
