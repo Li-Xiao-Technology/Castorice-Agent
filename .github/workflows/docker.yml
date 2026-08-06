@@ -15,6 +15,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      deployments: write
 
     steps:
     - uses: actions/checkout@v4
@@ -71,6 +72,26 @@ jobs:
           ghcr.io/${{ env.OWNER_LC }}/${{ env.IMAGE_NAME }}:latest
           docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
           docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest
+
+    - name: 创建 GitHub Deployment 记录
+      id: deployment
+      uses: bobheadxi/deployments@v1
+      with:
+        step: start
+        token: ${{ secrets.GITHUB_TOKEN }}
+        env: Container Registry
+        environment_url: https://github.com/${{ github.repository }}/pkgs/container/${{ env.IMAGE_NAME }}
+        desc: Docker 镜像已发布到 ghcr.io${{ secrets.DOCKERHUB_USERNAME != '' && ' + Docker Hub' || '' }}
+
+    - name: 更新 Deployment 状态为成功
+      uses: bobheadxi/deployments@v1
+      with:
+        step: finish
+        token: ${{ secrets.GITHUB_TOKEN }}
+        status: ${{ job.status }}
+        deployment_id: ${{ steps.deployment.outputs.deployment_id }}
+        env_url: https://github.com/${{ github.repository }}/pkgs/container/${{ env.IMAGE_NAME }}
+        desc: Docker 镜像已发布到 ghcr.io${{ secrets.DOCKERHUB_USERNAME != '' && ' + Docker Hub' || '' }}
 
     - name: 输出拉取命令
       run: |
