@@ -10,7 +10,7 @@
 ![CI](https://github.com/Li-Xiao-Technology/Castorice-Agent/actions/workflows/ci.yml/badge.svg?style=flat-square)
 ![Docker Pulls](https://img.shields.io/docker/pulls/lixiaolive/castorice-agent?style=flat-square)
 ![GitHub Release](https://img.shields.io/github/v/release/Li-Xiao-Technology/Castorice-Agent?style=flat-square)
-![Security](https://img.shields.io/badge/security-policy-🔒-red?style=flat-square)
+![Security](https://img.shields.io/badge/security-policy-red?style=flat-square)
 
 ---
 
