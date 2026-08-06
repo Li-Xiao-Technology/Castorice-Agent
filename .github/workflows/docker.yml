@@ -73,25 +73,55 @@ jobs:
           docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
           docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest
 
-    - name: 创建 GitHub Deployment 记录
-      id: deployment
-      uses: bobheadxi/deployments@v1
-      with:
-        step: start
-        token: ${{ secrets.GITHUB_TOKEN }}
-        env: Container Registry
-        environment_url: https://github.com/${{ github.repository }}/pkgs/container/${{ env.IMAGE_NAME }}
-        desc: Docker 镜像已发布到 ghcr.io${{ secrets.DOCKERHUB_USERNAME != '' && ' + Docker Hub' || '' }}
+    - name: 创建 GitHub Deployment
+      id: deploy_create
+      run: |
+        ENV_NAME="container-publish"
+        ENV_URL="https://github.com/${{ github.repository }}/pkgs/container/${{ env.IMAGE_NAME }}"
+        DESC="Docker 镜像已发布到 ghcr.io"
+        
+        DEPLOY_ID=$(gh api \
+          --method POST \
+          -H "Accept: application/vnd.github+json" \
+          /repos/${{ github.repository }}/deployments \
+          -f ref="${{ github.ref_name }}" \
+          -f environment="$ENV_NAME" \
+          -f description="$DESC" \
+          --jq '.id')
+        
+        echo "deployment_id=$DEPLOY_ID" >> $GITHUB_OUTPUT
+        echo "✅ Deployment 创建成功: id=$DEPLOY_ID, env=$ENV_NAME"
 
-    - name: 更新 Deployment 状态为成功
-      uses: bobheadxi/deployments@v1
-      with:
-        step: finish
-        token: ${{ secrets.GITHUB_TOKEN }}
-        status: ${{ job.status }}
-        deployment_id: ${{ steps.deployment.outputs.deployment_id }}
-        env_url: https://github.com/${{ github.repository }}/pkgs/container/${{ env.IMAGE_NAME }}
-        desc: Docker 镜像已发布到 ghcr.io${{ secrets.DOCKERHUB_USERNAME != '' && ' + Docker Hub' || '' }}
+    - name: 标记 Deployment 为成功
+      if: always()
+      run: |
+        DEPLOY_ID=${{ steps.deploy_create.outputs.deployment_id }}
+        if [ -z "$DEPLOY_ID" ]; then
+          echo "⚠️ 跳过：未获取到 deployment_id"
+          exit 0
+        fi
+        
+        STATUS="${{ job.status }}"
+        if [ "$STATUS" == "success" ]; then
+          DEPLOY_STATUS="success"
+        elif [ "$STATUS" == "failure" ]; then
+          DEPLOY_STATUS="failure"
+        else
+          DEPLOY_STATUS="error"
+        fi
+        
+        ENV_URL="https://github.com/${{ github.repository }}/pkgs/container/${{ env.IMAGE_NAME }}"
+        
+        gh api \
+          --method POST \
+          -H "Accept: application/vnd.github+json" \
+          /repos/${{ github.repository }}/deployments/$DEPLOY_ID/statuses \
+          -f state="$DEPLOY_STATUS" \
+          -f environment_url="$ENV_URL" \
+          -f log_url="$ENV_URL" \
+          --jq '.id'
+        
+        echo "✅ Deployment 状态已更新为: $DEPLOY_STATUS"
 
     - name: 输出拉取命令
       run: |
