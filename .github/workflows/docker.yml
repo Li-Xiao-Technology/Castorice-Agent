@@ -2,8 +2,8 @@ name: Docker
 
 on:
   push:
-    branches: [ main ]
-    tags: [ 'v*' ]
+    branches: [main]
+    tags: ['v*']
   workflow_dispatch:
 
 env:
@@ -18,117 +18,117 @@ jobs:
       deployments: write
 
     steps:
-    - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    - name: 设置小写镜像名
-      run: |
-        echo "OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+      - name: Lowercase owner
+        run: |
+          echo "OWNER_LC=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
 
-    - name: 提取版本号
-      id: meta
-      run: |
-        if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-          VERSION="${{ github.ref_name }}"
-        else
-          VERSION="latest"
-        fi
-        echo "version=$VERSION" >> $GITHUB_OUTPUT
+      - name: Extract version
+        id: meta
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VERSION="${{ github.ref_name }}"
+          else
+            VERSION="latest"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-    - name: 登录 ghcr.io
-      uses: docker/login-action@v3
-      with:
-        registry: ghcr.io
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Login to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: 登录 Docker Hub
-      if: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
-      uses: docker/login-action@v3
-      with:
-        registry: docker.io
-        username: ${{ secrets.DOCKERHUB_USERNAME }}
-        password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Login to Docker Hub
+        if: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-    - name: 构建并推送镜像（仅 ghcr.io）
-      if: ${{ secrets.DOCKERHUB_USERNAME == '' || secrets.DOCKERHUB_TOKEN == '' }}
-      uses: docker/build-push-action@v6
-      with:
-        context: .
-        file: ./Dockerfile
-        push: true
-        tags: |
-          ghcr.io/${{ env.OWNER_LC }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
-          ghcr.io/${{ env.OWNER_LC }}/${{ env.IMAGE_NAME }}:latest
+      - name: Build and push (ghcr only)
+        if: ${{ secrets.DOCKERHUB_USERNAME == '' || secrets.DOCKERHUB_TOKEN == '' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ env.OWNER_LC }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+            ghcr.io/${{ env.OWNER_LC }}/${{ env.IMAGE_NAME }}:latest
 
-    - name: 构建并推送镜像（ghcr.io + Docker Hub）
-      if: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
-      uses: docker/build-push-action@v6
-      with:
-        context: .
-        file: ./Dockerfile
-        push: true
-        tags: |
-          ghcr.io/${{ env.OWNER_LC }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
-          ghcr.io/${{ env.OWNER_LC }}/${{ env.IMAGE_NAME }}:latest
-          docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
-          docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest
+      - name: Build and push (ghcr + Docker Hub)
+        if: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ env.OWNER_LC }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+            ghcr.io/${{ env.OWNER_LC }}/${{ env.IMAGE_NAME }}:latest
+            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest
 
-    - name: 创建 GitHub Deployment
-      id: deploy_create
-      run: |
-        ENV_NAME="container-publish"
-        ENV_URL="https://github.com/${{ github.repository }}/pkgs/container/${{ env.IMAGE_NAME }}"
-        DESC="Docker 镜像已发布到 ghcr.io"
-        
-        DEPLOY_ID=$(gh api \
-          --method POST \
-          -H "Accept: application/vnd.github+json" \
-          /repos/${{ github.repository }}/deployments \
-          -f ref="${{ github.ref_name }}" \
-          -f environment="$ENV_NAME" \
-          -f description="$DESC" \
-          --jq '.id')
-        
-        echo "deployment_id=$DEPLOY_ID" >> $GITHUB_OUTPUT
-        echo "✅ Deployment 创建成功: id=$DEPLOY_ID, env=$ENV_NAME"
+      - name: Create GitHub Deployment
+        id: deploy_create
+        run: |
+          ENV_NAME="container-publish"
+          ENV_URL="https://github.com/${{ github.repository }}/pkgs/container/${{ env.IMAGE_NAME }}"
+          DESC="Published Docker image to ghcr.io"
 
-    - name: 标记 Deployment 为成功
-      if: always()
-      run: |
-        DEPLOY_ID=${{ steps.deploy_create.outputs.deployment_id }}
-        if [ -z "$DEPLOY_ID" ]; then
-          echo "⚠️ 跳过：未获取到 deployment_id"
-          exit 0
-        fi
-        
-        STATUS="${{ job.status }}"
-        if [ "$STATUS" == "success" ]; then
-          DEPLOY_STATUS="success"
-        elif [ "$STATUS" == "failure" ]; then
-          DEPLOY_STATUS="failure"
-        else
-          DEPLOY_STATUS="error"
-        fi
-        
-        ENV_URL="https://github.com/${{ github.repository }}/pkgs/container/${{ env.IMAGE_NAME }}"
-        
-        gh api \
-          --method POST \
-          -H "Accept: application/vnd.github+json" \
-          /repos/${{ github.repository }}/deployments/$DEPLOY_ID/statuses \
-          -f state="$DEPLOY_STATUS" \
-          -f environment_url="$ENV_URL" \
-          -f log_url="$ENV_URL" \
-          --jq '.id'
-        
-        echo "✅ Deployment 状态已更新为: $DEPLOY_STATUS"
+          DEPLOY_ID=$(gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            /repos/${{ github.repository }}/deployments \
+            -f ref="${{ github.ref_name }}" \
+            -f environment="$ENV_NAME" \
+            -f description="$DESC" \
+            -f required_contexts[]= \
+            --jq '.id')
 
-    - name: 输出拉取命令
-      run: |
-        echo "✅ 镜像构建成功！"
-        echo "📦 ghcr.io 拉取："
-        echo "   docker pull ghcr.io/${{ env.OWNER_LC }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}"
-        if [ -n "${{ secrets.DOCKERHUB_USERNAME }}" ]; then
-          echo "📦 Docker Hub 拉取："
-          echo "   docker pull ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}"
-        fi
+          echo "deployment_id=$DEPLOY_ID" >> $GITHUB_OUTPUT
+          echo "Deployment created: id=$DEPLOY_ID, env=$ENV_NAME"
+
+      - name: Set deployment status
+        if: always()
+        run: |
+          DEPLOY_ID=${{ steps.deploy_create.outputs.deployment_id }}
+          if [ -z "$DEPLOY_ID" ] || [ "$DEPLOY_ID" = "null" ]; then
+            echo "Skip: no deployment_id available"
+            exit 0
+          fi
+
+          STATUS="${{ job.status }}"
+          case "$STATUS" in
+            success) DEPLOY_STATUS="success" ;;
+            failure) DEPLOY_STATUS="failure" ;;
+            *)       DEPLOY_STATUS="error" ;;
+          esac
+
+          ENV_URL="https://github.com/${{ github.repository }}/pkgs/container/${{ env.IMAGE_NAME }}"
+
+          gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            /repos/${{ github.repository }}/deployments/$DEPLOY_ID/statuses \
+            -f state="$DEPLOY_STATUS" \
+            -f environment_url="$ENV_URL" \
+            -f log_url="$ENV_URL" \
+            --jq '.id'
+
+          echo "Deployment status set to: $DEPLOY_STATUS"
+
+      - name: Print pull commands
+        run: |
+          echo "Image built successfully!"
+          echo "ghcr.io pull:"
+          echo "  docker pull ghcr.io/${{ env.OWNER_LC }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}"
+          if [ -n "${{ secrets.DOCKERHUB_USERNAME }}" ]; then
+            echo "Docker Hub pull:"
+            echo "  docker pull ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}"
+          fi
