@@ -92,9 +92,26 @@ if (-not $nodeCmd) {
 }
 Write-Ok "Node.js ready"
 
-# ---------- 3. Start backend ----------
+# ---------- 3. Load .env (contains API keys) ----------
+Write-Step "Loading .env..."
+$envFile = Join-Path $ProjectRoot ".env"
+if (Test-Path $envFile) {
+    Get-Content $envFile | ForEach-Object {
+        $line = $_.Trim()
+        if ($line -and -not $line.StartsWith("#") -and $line.Contains("=")) {
+            $idx = $line.IndexOf("=")
+            $k = $line.Substring(0, $idx).Trim()
+            $v = $line.Substring($idx + 1).Trim().Trim('"').Trim("'")
+            Set-Item -Path "env:$k" -Value $v
+        }
+    }
+    Write-Ok ".env loaded"
+} else {
+    Write-Warn ".env not found, backend may fail to call LLM providers"
+}
+
+# ---------- 4. Start backend ----------
 Write-Step "Starting backend (port $BackendPort)..."
-$env:FREELLMAPI_API_KEY = "***REMOVED***"
 $backendArgs = @("-m", "castorice.main", "--mode", "http")
 $backendProc = Start-Process -FilePath $VenvPython -ArgumentList $backendArgs `
     -RedirectStandardError $BackendLog -NoNewWindow -PassThru -WorkingDirectory $ProjectRoot
@@ -191,7 +208,7 @@ $pidData | ConvertTo-Json | Set-Content $PidFile -Encoding UTF8
 Write-Step "Opening browser: http://127.0.0.1:$FrontendPort"
 Start-Process "http://127.0.0.1:$FrontendPort"
 
-# ---------- 6. Keep running ----------
+# ---------- 7. Keep running ----------
 Write-Host ""
 Write-Host "============================================================" -ForegroundColor Magenta
 Write-Host "  Castorice Agent started" -ForegroundColor Magenta
