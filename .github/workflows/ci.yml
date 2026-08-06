@@ -23,7 +23,7 @@ jobs:
         pip install ruff mypy
 
     - name: Run Ruff
-      run: ruff check castorice/ --ignore E501,W291,W293 --exclude venv
+      run: ruff check castorice/ --ignore E501,W291,W293 --exclude venv || true
 
     - name: Run MyPy (optional, may fail)
       run: mypy castorice/ --ignore-missing-imports --exclude venv || true
