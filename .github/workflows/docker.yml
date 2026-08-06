@@ -6,6 +6,7 @@ on:
     tags: [ 'v*' ]
   workflow_dispatch:
 
+# Docker 镜像自动构建：推送到 ghcr.io 和 Docker Hub
 env:
   IMAGE_NAME: castorice-agent
 
