@@ -407,7 +407,7 @@ section {
 }
 
 .code-block {
-  background: rgba(0, 0, 0, 0.4);
+  background: #050309;
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 1rem;
@@ -415,7 +415,46 @@ section {
   font-size: 0.85rem;
   color: var(--accent-2);
   overflow-x: auto;
+  overflow-y: auto;
   white-space: pre;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(139, 92, 246, 0.4) #050309;
+}
+
+.code-block::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
+}
+.code-block::-webkit-scrollbar-track {
+  background: #050309;
+  border-radius: 0 0 10px 10px;
+}
+.code-block::-webkit-scrollbar-thumb {
+  background: rgba(139, 92, 246, 0.4);
+  border-radius: 4px;
+}
+.code-block::-webkit-scrollbar-thumb:hover {
+  background: rgba(139, 92, 246, 0.7);
+}
+
+/* Global scrollbar for whole page */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(139, 92, 246, 0.3) var(--bg);
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track {
+  background: var(--bg);
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(139, 92, 246, 0.3);
+  border-radius: 5px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(139, 92, 246, 0.6);
 }
 
 /* Footer */
